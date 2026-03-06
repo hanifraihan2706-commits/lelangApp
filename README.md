@@ -92,7 +92,7 @@ J: Aplikasi sudah memperbaiki format Rp secara otomatis.
 KONTAK / BANTUAN
 ─────────────────────────────────────────────────────
 
-Jika mengalami kendala, hubungi tim IT dengan
+Jika mengalami kendala, hubungi HANIF @haniffraihan dengan
 menyertakan screenshot panel Log di aplikasi.
 
 =======================================================# lelangApp
