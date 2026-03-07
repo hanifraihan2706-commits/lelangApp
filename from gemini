@@ -97,14 +97,23 @@ def safe_str(val, default: str = "-") -> str:
 def format_rupiah(amount) -> str:
     """Rp. 1.000.000,00"""
     try:
+        if amount is None:
+            return "Rp. 0,00"
+            
         if isinstance(amount, str):
-            # Bisa jadi string dari pre-formatted text
-            amount = float(re.sub(r"[^\d.]", "", amount.replace(",", ".")))
+            # Bersihkan karakter non-angka kecuali koma untuk desimal
+            # Khusus Indonesia: titik biasanya ribuan, koma desimal
+            clean_amount = re.sub(r"[^\d,]", "", amount).replace(",", ".")
+            amount = float(clean_amount)
+            
         amount = float(amount)
         if amount <= 0:
             return "Rp. 0,00"
+            
         int_part = int(amount)
-        dec_part = round((amount - int_part) * 100)
+        # Ambil dua angka di belakang koma
+        dec_part = int(round((amount - int_part) * 100))
+        
         formatted = "{:,}".format(int_part).replace(",", ".")
         return f"Rp. {formatted},{dec_part:02d}"
     except Exception:
@@ -295,6 +304,7 @@ def add_lot_entry(doc, item: dict, section: str, seq_num: int = None):
 # ══════════════════════════════════════════════════════════════════
 
 # Kamus Alias: Daftar kemungkinan nama kolom (Case Insensitive)
+
 COLUMN_ALIASES = {
     "lot": ["LOT"],
     "nopol": ["NOPOL", "NOMOR POLISI", "NO POLISI", "NO. POLISI"],
@@ -307,8 +317,9 @@ COLUMN_ALIASES = {
     "status": ["STATUS"],
     "nama_customer": ["NAMA CUSTOMER", "NAMA CUST", "PEMBELI"],
     "alamat_customer": ["ALAMAT CUSTOMER", "ALAMAT CUST", "ALAMAT"],
-    "open_price": ["OPEN PRICE", "OPEN PRICE ALL", "LIMIT", "NILAI LIMIT"],
-    "harga_terbentuk": ["HARGA TERBENTUK", "LAKU", "HARGA LELANG", "RESULT PRICE"],
+    # Diperbarui agar lebih akurat mencari kolom angka:
+    "open_price": ["HARGA AWAL", "OPEN PRICE", "OPEN PRICE ALL", "NILAI LIMIT"],
+    "harga_terbentuk": ["HARGA TERBENTUK", "HARGA LELANG", "LAKU", "RESULT PRICE"],
 }
 
 def _find_header_and_map(ws, log) -> tuple:
@@ -418,16 +429,15 @@ def read_excel_data(excel_path: str, sheet_name: str, log_cb=None) -> list:
 
 def resolve_section(status: str) -> str:
     """
-    'SOLD'     → 'SOLD'
-    'NOT SOLD' / 'NOTSOLD' → 'LIMIT'
-    'CANCEL' / 'TAP' / lainnya → 'TAP'
+    Memetakan status dari Excel ke kategori Section.
     """
     s = status.upper().replace(" ", "")
-    if s == "SOLD":
+    # Tambahkan TERJUAL dan LAKU di sini
+    if s in ("SOLD", "TERJUAL", "LAKU"):
         return "SOLD"
-    if s in ("NOTSOLD", ""):
+    if s in ("NOTSOLD", "TAKTERJUAL", "BELUM LAKU", ""): 
         return "LIMIT"
-    return "TAP"   # CANCEL, TAP, dll
+    return "TAP"
 
 # ══════════════════════════════════════════════════════════════════
 #  DOCUMENT GENERATOR  (Main Engine)
@@ -562,7 +572,6 @@ def _add_closing_section(doc: Document, meta: dict, items: list):
                         space_after_pt=0)
     _add_run(p_name, pejabat, bold=True)
 
-
 def generate_doc(excel_path: str, output_path: str, sheet_name: str, meta: dict, progress_cb=None, log_cb=None) -> tuple:
     def log(m):
         if log_cb:
@@ -587,8 +596,11 @@ def generate_doc(excel_path: str, output_path: str, sheet_name: str, meta: dict,
         if not items:
             raise ValueError("Tidak ada data lot yang dapat dibaca dari sheet ini.")
 
-        sold_items = [i for i in items if i["status"].strip().upper() == "SOLD"]
-        tap_items  = [i for i in items if i["status"].strip().upper() != "SOLD"]
+        # KUNCI PERBAIKAN: Mendukung multibahasa untuk status Laku
+        STATUS_LAKU = ("SOLD", "TERJUAL", "LAKU")
+        
+        sold_items = [i for i in items if i["status"].strip().upper() in STATUS_LAKU]
+        tap_items  = [i for i in items if i["status"].strip().upper() not in STATUS_LAKU]
 
         log(f"   📌 TOTAL: {len(items)} | SOLD: {len(sold_items)} | TAP: {len(tap_items)}")
         prog(25)
@@ -618,7 +630,7 @@ def generate_doc(excel_path: str, output_path: str, sheet_name: str, meta: dict,
             p = _new_para(doc, space_before_pt=4, space_after_pt=2)
             _add_run(p, title)
 
-        # Seksi 1 — Nilai Limit (SEMUA LOT MUNCUL DI SINI)
+        # Seksi 1 — Nilai Limit (Semua Item)
         log(f"   📋 LIMIT: {len(items)} lot (Semua item)")
         for seq, itm in enumerate(items, start=1):
             try:
@@ -630,25 +642,25 @@ def generate_doc(excel_path: str, output_path: str, sheet_name: str, meta: dict,
         # Seksi 2 — Barang Laku Terjual
         if sold_items:
             log(f"   💰 SOLD: {len(sold_items)} lot")
-            p_sep = _new_para(doc, space_before_pt=6, space_after_pt=0)
+            p_sep = _new_para(doc, space_before_pt=12, space_after_pt=0)
             _add_run(p_sep, DASH_LINE)
             _sec_hdr("Barang laku terjual:")
-            p_sep2 = _new_para(doc, space_after_pt=0)
+            p_sep2 = _new_para(doc, space_after_pt=6)
             _add_run(p_sep2, DASH_LINE)
             for seq, itm in enumerate(sold_items, start=1):
                 try:
                     add_lot_entry(doc, itm, "SOLD", seq_num=seq)
                 except Exception as e:
                     log(f"   ⚠️  Lot {itm['lot']} error: {e}")
-        prog(75)
+        prog(80)
 
         # Seksi 3 — Barang Tidak Laku Terjual (TAP)
         if tap_items:
             log(f"   ❌ TAP: {len(tap_items)} lot")
-            p_sep = _new_para(doc, space_before_pt=6, space_after_pt=0)
+            p_sep = _new_para(doc, space_before_pt=12, space_after_pt=0)
             _add_run(p_sep, DASH_LINE)
             _sec_hdr("Barang tidak laku terjual:")
-            p_sep2 = _new_para(doc, space_after_pt=0)
+            p_sep2 = _new_para(doc, space_after_pt=6)
             _add_run(p_sep2, DASH_LINE)
             for seq, itm in enumerate(tap_items, start=1):
                 try:
