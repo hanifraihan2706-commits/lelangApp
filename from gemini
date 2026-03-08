@@ -133,7 +133,7 @@ CONTENT_W_TWIPS  = int(CONTENT_W_CM * 567)   # 8788 twips
 POS_LABEL_L      = 3500   # Posisi teks awalan ("Nilai Limit", "Harga Lelang", "Pembeli") -> Pasti Rata Kiri
 POS_COLON        = 5500   # Posisi tanda Titik Dua (:) -> Pasti Lurus ke bawah
 POS_RIGHT        = CONTENT_W_TWIPS            # Garis ujung kanan mentok tanpa celah
-POS_MID          = CONTENT_W_TWIPS // 2     # Posisi tulisan "TAP" tepat di tengah
+POS_MID          = CONTENT_W_TWIPS // 2
 TAB_DESC_START  = TAB_TWIPS       
 # ── ALIAS (Mencegah NameError di fungsi add_lot_entry versi apa pun) ───────
 TAB_FULL         = POS_RIGHT
