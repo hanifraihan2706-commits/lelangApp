@@ -121,28 +121,27 @@ MARGIN_B_CM    = 2.0
 # Lebar konten (21.0 - 4.0 - 1.5 = 15.5 cm)
 CONTENT_W_CM   = PAGE_W_CM - MARGIN_L_CM - MARGIN_R_CM  # 15.5
 
-# Tab stop posisi 420 twips ≈ 0.74 cm → pemisah nomor LOT & teks
-TAB_TWIPS       = 420
-TAB_CM          = TAB_TWIPS / 567          # ≈ 0.741 cm
+# Tab stop posisi 600 twips ≈ 1.06 cm → pemisah nomor LOT & teks
+TAB_TWIPS       = 600
+TAB_CM          = TAB_TWIPS / 567          # ≈ 1.058 cm
 
-# ── Tab Leader DASHES — Posisi RELATIF (Dikurangi TAB_TWIPS) ───────────────
+# ── Tab Leader DASHES — Posisi ABSOLUT (Memastikan Rata Vertikal) ──────────
 CONTENT_W_TWIPS  = int(CONTENT_W_CM * 567)   # 8788 twips
 
-def _rel(absolute_twips):
-    """Menghitung posisi tab relatif terhadap indentasi paragraf"""
-    return absolute_twips - TAB_TWIPS
-
-# STANDARDISASI POSISI (Agar semua label dan titik dua rata vertikal atas-bawah)
-POS_LABEL_L      = _rel(2800)   # Posisi teks awalan ("Nilai Limit", "Harga Lelang", "Pembeli")
-POS_COLON        = _rel(5500)   # Posisi tanda Titik Dua (:) -> Rata Lurus ke bawah!
-
-POS_RIGHT        = _rel(CONTENT_W_TWIPS)      # Garis ujung kanan mentok tanpa celah
-POS_MID          = _rel(CONTENT_W_TWIPS // 2) # Posisi tulisan "TAP" di tengah
-
+# STANDARDISASI POSISI (Menggunakan angka absolut, bukan relatif)
+# Titik 0 adalah batas margin kiri kertas.
+POS_LABEL_L      = 3500   # Posisi teks awalan ("Nilai Limit", "Harga Lelang", "Pembeli") -> Pasti Rata Kiri
+POS_COLON        = 5500   # Posisi tanda Titik Dua (:) -> Pasti Lurus ke bawah
+POS_RIGHT        = CONTENT_W_TWIPS            # Garis ujung kanan mentok tanpa celah
+POS_MID          = CONTENT_W_TWIPS // 2     # Posisi tulisan "TAP" tepat di tengah
+TAB_DESC_START  = TAB_TWIPS       
 # ── ALIAS (Mencegah NameError di fungsi add_lot_entry versi apa pun) ───────
 TAB_FULL         = POS_RIGHT
 TAP_MID_POS      = POS_MID
 TAP_END_POS      = POS_RIGHT
+TAB_RIGHT_EDGE   = POS_RIGHT
+TAB_LABEL_L      = POS_LABEL_L   # <--- OBAT ERROR 1
+TAB_COLON_L      = POS_COLON     # <--- OBAT ERROR 2
 
 # Samakan semua titik kordinat label ke posisi rata yang sudah distandardisasi
 POS_NILAI_L      = POS_LABEL_L
@@ -305,21 +304,25 @@ def _build_description(item: dict) -> str:
     )
 
 def _line1(doc, txt):
-    """Baris deskripsi utama lot."""
+    """Baris deskripsi utama lot dengan tab stop eksplisit untuk teks."""
     p = _new_para(doc, left_cm=TAB_CM, first_cm=-TAB_CM)
-    # Tab 0 untuk teks awal, Tab POS_RIGHT untuk garis mentok kanan
-    _add_tabstops(p, [(0, None, "left"), (POS_RIGHT, "dash", "right")])
+    # Tambahkan TAB_DESC_START agar teks deskripsi rata lurus meskipun nomornya 3 digit
+    _add_tabstops(p, [
+        (TAB_DESC_START, None, "left"), 
+        (TAB_RIGHT_EDGE, "dash", "right")
+    ])
     _add_run(p, f"{txt}\t") 
     return p
 
 def _label_line_triple(doc, label, value):
-    """Baris label (Limit/Harga/Pembeli) dengan garis penuh tanpa celah."""
+    """Membuat baris Label (Limit/Harga/Pembeli) dengan garis yang lurus vertikal."""
     p = _new_para(doc, left_cm=TAB_CM)
     _add_tabstops(p, [
-        (POS_LABEL_L, "dash", "left"), 
-        (POS_COLON, "dash", "left"), 
-        (POS_RIGHT, "dash", "right")
+        (TAB_LABEL_L, "dash", "left"),    # Garis dari deskripsi ke label
+        (TAB_COLON_L, "dash", "left"),    # Garis dari label ke titik dua (:)
+        (TAB_RIGHT_EDGE, "dash", "right") # Garis dari value ke margin kanan
     ])
+    # \t pertama memicu garis ke awal label, \t kedua memicu garis ke titik dua
     _add_run(p, f"\t{label}\t: {value}\t")
     return p
 
