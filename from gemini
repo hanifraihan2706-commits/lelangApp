@@ -24,6 +24,87 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
+import subprocess
+import sys
+import os
+import hashlib
+import tkinter as tk
+from tkinter import simpledialog, messagebox
+
+# --- 1. FUNGSI AMBIL ID PERANGKAT ---
+
+def get_hwid():
+    try:
+        if sys.platform == "darwin":  # Khusus Mac
+            # Menggunakan ioreg agar lebih cepat dan stabil di macOS
+            cmd = "ioreg -rd1 -c IOPlatformExpertDevice | grep -E 'IOPlatformUUID' | awk '{print $3}' | tr -d '\"'"
+            result = subprocess.check_output(cmd, shell=True).decode().strip()
+            return result if result else "ID-MAC-TIDAK-TERDETEKSI"
+            
+        elif sys.platform == "win32":  # Khusus Windows
+            cmd = "wmic csproduct get uuid"
+            output = subprocess.check_output(cmd, shell=True).decode().split('\n')
+            return output[1].strip() if len(output) > 1 else "ID-WIN-TIDAK-TERDETEKSI"
+            
+    except Exception as e:
+        return f"ERROR-ID: {str(e)[:10]}"
+    return "UNKNOWN-PLATFORM"
+
+# --- 2. RUMUS RAHASIA PASSWORD ---
+def generate_expected_key(hwid):
+    # KATA KUNCI RAHASIA (Pastikan sama dengan di file bikin_password.py)
+    secret_salt = "LELANG_APP_PRO_2026" 
+    raw_key = hwid + secret_salt
+    hashed_key = hashlib.sha256(raw_key.encode()).hexdigest()
+    return hashed_key[:10].upper()
+
+# --- 3. SISTEM PENGECEKAN LISENSI ---
+def check_license():
+    current_id = get_hwid()
+    expected_password = generate_expected_key(current_id)
+    
+    # Simpan lisensi di folder Documents agar tidak kena error "Read-only"
+    home_dir = os.path.expanduser("~")
+    license_file = os.path.join(home_dir, "Documents", "lisensi.key")
+
+    if os.path.exists(license_file):
+        with open(license_file, "r") as f:
+            saved_password = f.read().strip()
+        if saved_password == expected_password:
+            return
+
+    # Skenario A: Jika pembeli sudah pernah aktivasi
+    if os.path.exists(license_file):
+        with open(license_file, "r") as f:
+            saved_password = f.read().strip()
+        if saved_password == expected_password:
+            return 
+
+    # Skenario B: Jika belum aktivasi (Pengguna Baru)
+    root_auth = tk.Tk() # Sekarang ini tidak akan error lagi
+    root_auth.withdraw() 
+    
+    pesan = (f"Aplikasi Risalah Lelang belum diaktivasi.\n\n"
+             f"ID Perangkat Anda:\n{current_id}\n\n"
+             f"Silakan Salin/Foto ID ini dan kirimkan ke Hanif Raihan untuk membeli Password Aktivasi.")
+    messagebox.showwarning("Aktivasi Diperlukan", pesan)
+    
+    user_input = simpledialog.askstring("Input Password", 
+                                        "Masukkan Password Aktivasi Anda:", 
+                                        parent=root_auth)
+    
+    if user_input and user_input.strip().upper() == expected_password:
+        with open(license_file, "w") as f:
+            f.write(user_input.strip().upper())
+        messagebox.showinfo("Sukses", "Aktivasi berhasil! Aplikasi siap digunakan.")
+        root_auth.destroy()
+    else:
+        messagebox.showerror("Akses Ditolak", "Password salah atau dibatalkan. Program ditutup.")
+        root_auth.destroy()
+        sys.exit()
+
+# Ingat, tetap panggil check_license() di bagian paling bawah (if __name__ == "__main__":)
+
 # ══════════════════════════════════════════════════════════════════
 #  CONSTANTS  (Semua ukuran dalam Cm / Pt / Twips)
 # ══════════════════════════════════════════════════════════════════
@@ -270,34 +351,7 @@ def add_lot_entry(doc, item: dict, section: str, seq_num: int = None):
         # TAP di tengah dengan garis penutup kiri-kanan
         _add_tabstops(p, [(POS_MID, "dash", "center"), (POS_RIGHT, "dash", "right")])
         _add_run(p, "\tTAP\t")
-    lot_num   = item["lot"]
-    no_rangka = item["no_rangka"]
-    no_mesin  = item["no_mesin"]
-    desc      = _build_description(item)
-    
-    # Prefix "Lot X" hanya untuk seksi hasil (Sold/TAP)
-    lot_pfx   = f"Lot {lot_num}, " if section in ("SOLD", "TAP") else ""
-    list_num  = seq_num if seq_num else lot_num
-
-    if section == "LIMIT":
-        val = format_rupiah(item.get("limit", 0))
-        _line1(doc, f"{lot_num}.\t{desc} {no_rangka}, Nomor Mesin {no_mesin},")
-        _label_line_triple(doc, "Nilai Limit", f"{val}.")
-        # Tidak ada _full_sep di sini agar langsung lot berikutnya
-
-    elif section == "SOLD":
-        val = format_rupiah(item.get("harga_terbentuk", 0))
-        pembeli = f"{item.get('nama_customer', '-')}, beralamat di {item.get('alamat_customer', '-')}"
-        _line1(doc, f"{seq_num}.\t{lot_pfx}{desc} {no_rangka}, Nomor Mesin {no_mesin},")
-        _label_line_triple(doc, "Harga Lelang", f"{val}.")
-        _label_line_triple(doc, "Pembeli", f"{pembeli}.")
-
-    elif section == "TAP":
-        _line1(doc, f"{seq_num}.\t{lot_pfx}{desc} {no_rangka}, Nomor Mesin {no_mesin}.")
-        p = _new_para(doc, left_cm=TAB_CM)
-        # TAP di tengah dengan garis penutup kiri-kanan
-        _add_tabstops(p, [(POS_MID, "dash", "center"), (POS_RIGHT, "dash", "right")])
-        _add_run(p, "\tTAP\t")
+  
 
 # ══════════════════════════════════════════════════════════════════
 #  DYNAMIC EXCEL DATA READER (AUTO-DETECT COLUMNS)
@@ -688,6 +742,8 @@ def generate_doc(excel_path: str, output_path: str, sheet_name: str, meta: dict,
         log(f"❌ ERROR: {exc}")
         log(traceback.format_exc())
         return False, str(exc)
+
+
 
 # ══════════════════════════════════════════════════════════════════
 #  GUI  —  TKINTER  (Dark Theme)
@@ -1122,6 +1178,16 @@ class LelangApp(tk.Tk):
 #  ENTRY POINT
 # ══════════════════════════════════════════════════════════════════
 
+# =================================================================
+# JALANKAN APLIKASI
+# =================================================================
 if __name__ == "__main__":
-    app = LelangApp()
-    app.mainloop()
+    try:
+        check_license() # Satpam lisensi
+        app = LelangApp()
+        app.mainloop()
+    except Exception as e:
+        # Jika ada error, minimal dia kasih tahu lewat popup sebelum mati
+        root_err = tk.Tk()
+        root_err.withdraw()
+        messagebox.showerror("Fatal Error", f"Aplikasi gagal dibuka:\n{e}")
