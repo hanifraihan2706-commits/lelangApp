@@ -4,8 +4,18 @@ LELANG APPS - Aplikasi Desktop Konversi Risalah Lelang
 Mengonversi data Excel ke Risalah Lelang Word (.docx)
 
 Author   : Senior Python Developer
-Version  : 2.0
-Standard : OpenXML / python-docx (F4, Times New Roman 12pt)
+Version  : 3.0 (Fix: label dash, multiline, footer per-lembar)
+Standard : OpenXML / python-docx (F4, Arial 12pt)
+
+CHANGELOG v3.0:
+  - [FIX] _label_line_triple: Hapus dash sebelum label & trailing dash
+          Format lama : ---Nilai Limit---: Rp. X,00---
+          Format baru : Nilai Limit---------: Rp. X,00.
+  - [FIX] Section 2 multi-line: Hapus trailing dash dari label lines
+          (Pembeli alamat panjang tidak lagi putus di tengah)
+  - [NEW] Footer otomatis setiap lembar: "Lembar Kedua dari Risalah
+          Lelang Nomor X tanggal Y" + TTD Pejabat Lelang menggunakan
+          nested Word IF { PAGE } field → ordinal Indonesia otomatis
 """
 
 import tkinter as tk
@@ -24,58 +34,130 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
+import hashlib
+from tkinter import simpledialog
+
+# --- 1. FUNGSI AMBIL ID PERANGKAT ---
+
+def get_hwid():
+    try:
+        if sys.platform == "darwin":
+            cmd = "ioreg -rd1 -c IOPlatformExpertDevice | grep -E 'IOPlatformUUID' | awk '{print $3}' | tr -d '\"'"
+            result = subprocess.check_output(cmd, shell=True).decode().strip()
+            return result if result else "ID-MAC-TIDAK-TERDETEKSI"
+        elif sys.platform == "win32":
+            cmd = "wmic csproduct get uuid"
+            output = subprocess.check_output(cmd, shell=True).decode().split('\n')
+            return output[1].strip() if len(output) > 1 else "ID-WIN-TIDAK-TERDETEKSI"
+    except Exception as e:
+        return f"ERROR-ID: {str(e)[:10]}"
+    return "UNKNOWN-PLATFORM"
+
+def generate_expected_key(hwid):
+    secret_salt = "LELANG_APP_PRO_2026"
+    raw_key = hwid + secret_salt
+    hashed_key = hashlib.sha256(raw_key.encode()).hexdigest()
+    return hashed_key[:10].upper()
+
+def check_license():
+    current_id = get_hwid()
+    expected_password = generate_expected_key(current_id)
+    home_dir = os.path.expanduser("~")
+    license_file = os.path.join(home_dir, "Documents", "lisensi.key")
+
+    if os.path.exists(license_file):
+        with open(license_file, "r") as f:
+            saved_password = f.read().strip()
+        if saved_password == expected_password:
+            return
+
+    root_auth = tk.Tk()
+    root_auth.withdraw()
+    pesan = (f"Aplikasi Risalah Lelang belum diaktivasi.\n\n"
+             f"ID Perangkat Anda:\n{current_id}\n\n"
+             f"Silakan Salin/Foto ID ini dan kirimkan ke Hanif Raihan untuk membeli Password Aktivasi.")
+    messagebox.showwarning("Aktivasi Diperlukan", pesan)
+    user_input = simpledialog.askstring("Input Password",
+                                        "Masukkan Password Aktivasi Anda:",
+                                        parent=root_auth)
+    if user_input and user_input.strip().upper() == expected_password:
+        with open(license_file, "w") as f:
+            f.write(user_input.strip().upper())
+        messagebox.showinfo("Sukses", "Aktivasi berhasil! Aplikasi siap digunakan.")
+        root_auth.destroy()
+    else:
+        messagebox.showerror("Akses Ditolak", "Password salah atau dibatalkan. Program ditutup.")
+        root_auth.destroy()
+        sys.exit()
+
+
 # ══════════════════════════════════════════════════════════════════
-#  CONSTANTS  (Semua ukuran dalam Cm / Pt / Twips)
+#  CONSTANTS
 # ══════════════════════════════════════════════════════════════════
 FONT_NAME      = "Arial"
 FONT_SIZE_PT   = 12
 
-PAGE_W_CM      = 21.0    # F4
-PAGE_H_CM      = 33.0    # F4
+PAGE_W_CM      = 21.0
+PAGE_H_CM      = 33.0
 MARGIN_L_CM    = 4.0
 MARGIN_R_CM    = 1.5
 MARGIN_T_CM    = 2.0
 MARGIN_B_CM    = 2.0
 
-# Lebar konten (21.0 - 4.0 - 1.5 = 15.5 cm)
 CONTENT_W_CM   = PAGE_W_CM - MARGIN_L_CM - MARGIN_R_CM  # 15.5
+TAB_TWIPS       = 600
+TAB_CM          = TAB_TWIPS / 567
 
-# Tab stop posisi 420 twips ≈ 0.74 cm → pemisah nomor LOT & teks
-TAB_TWIPS       = 420
-TAB_CM          = TAB_TWIPS / 567          # ≈ 0.741 cm
+CONTENT_W_TWIPS  = int(CONTENT_W_CM * 567)   # 8788 twips
 
-# ── Tab Leader DASHES — posisi (twips dari left margin halaman) ─────────────
-# WD_TAB_LEADER.DASHES mengisi ruang antara tab character dan tab stop
-# secara OTOMATIS — menggantikan seluruh hardcode dash-string.
-#
-# Acuan Salinan Risalah 027 | TNR 12pt | F4 | hyphen ≈ 79 twips
-#   29 dash → Nilai Limit → 25 dash | 34 dash → Harga Lelang → 5 dash
-#   54 dash → Pembeli → 13 dash
+# --- PENGATURAN JARAK DASH & POSISI TENGAH ---
+POS_LABEL_L      = 600   # Jarak dash sebelum teks label (Limit/Harga/Pembeli)
+POS_COLON        = 3600   # TITIK DUA DI TENGAH PARAGRAF
+POS_PEMBELI_L    = 600   # Jarak dash sebelum teks label "Pembeli"
+POS_RIGHT        = CONTENT_W_TWIPS - 100 # Batas kanan mentok
+POS_MID          = CONTENT_W_TWIPS // 2
+TAB_DESC_START   = TAB_TWIPS
 
-CONTENT_W_TWIPS  = int(CONTENT_W_CM * 567)   # 8789
+# --- ALIAS (Mencegah Error Variable Not Defined) ---
+TAB_FULL         = POS_RIGHT
+TAP_MID_POS      = POS_MID
+TAP_END_POS      = POS_RIGHT
+TAB_RIGHT_EDGE   = POS_RIGHT
+TAB_LABEL_L      = POS_LABEL_L
+TAB_COLON_L      = POS_COLON
 
-TAB_FULL         = CONTENT_W_TWIPS            # full-width dash separator
+POS_NILAI_L      = POS_LABEL_L
+POS_NILAI_C      = POS_COLON
+POS_HARGA_L      = POS_LABEL_L
+POS_HARGA_C      = POS_COLON
+POS_PEMB_L       = POS_LABEL_L
+POS_PEMB_C       = POS_COLON
 
-TAB_NILAI_L      = 2711   # 'Nilai Limit' label start  ≈ 4.78 cm
-TAB_NILAI_C      = 6086   # ':' Nilai Limit            ≈ 10.73 cm
 
-TAB_HARGA_L      = 3106   # 'Harga Lelang' label start ≈ 5.48 cm
-TAB_HARGA_C      = 5101   # ':' Harga Lelang           ≈ 9.00 cm
-
-TAB_PEMB_L       = 4686   # 'Pembeli' label start      ≈ 8.26 cm
-TAB_PEMB_C       = 6613   # ':' Pembeli                ≈ 11.66 cm
-
-TAP_MID_POS      = CONTENT_W_TWIPS // 2      # ~4394 — posisi "TAP" tengah
-TAP_END_POS      = CONTENT_W_TWIPS           # 8789  — ujung kanan
-
-# Header/footer separator (di luar lot entry)
 DASH_LINE        = "-" * 70
+
+# Kamus bulan Indonesia untuk footer tanggal
+BULAN_ID = {
+    "01": "Januari", "02": "Februari", "03": "Maret",  "04": "April",
+    "05": "Mei",     "06": "Juni",     "07": "Juli",   "08": "Agustus",
+    "09": "September","10": "Oktober", "11": "November","12": "Desember"
+}
+
+# Ordinal Indonesia untuk footer (halaman 1–15)
+ORDINAL_ID = [
+    (1,  "Pertama"),   (2,  "Kedua"),      (3,  "Ketiga"),
+    (4,  "Keempat"),   (5,  "Kelima"),     (6,  "Keenam"),
+    (7,  "Ketujuh"),   (8,  "Kedelapan"),  (9,  "Kesembilan"),
+    (10, "Kesepuluh"), (11, "Kesebelas"),  (12, "Keduabelas"),
+    (13, "Ketigabelas"),(14,"Keempatbelas"),(15,"Kelimabelas"),
+]
+
+
 # ══════════════════════════════════════════════════════════════════
 #  UTILITY FUNCTIONS
 # ══════════════════════════════════════════════════════════════════
 
 def safe_str(val, default: str = "-") -> str:
-    """Konversi nilai Excel ke string; integer besar → str langsung."""
     if val is None:
         return default
     if isinstance(val, float) and val == int(val):
@@ -84,23 +166,23 @@ def safe_str(val, default: str = "-") -> str:
     return s if s and s.lower() not in ("none", "nan", "") else default
 
 def format_rupiah(amount) -> str:
-    """Rp. 1.000.000,00"""
     try:
+        if amount is None:
+            return "Rp. 0,00"
         if isinstance(amount, str):
-            # Bisa jadi string dari pre-formatted text
-            amount = float(re.sub(r"[^\d.]", "", amount.replace(",", ".")))
+            clean_amount = re.sub(r"[^\d,]", "", amount).replace(",", ".")
+            amount = float(clean_amount)
         amount = float(amount)
         if amount <= 0:
             return "Rp. 0,00"
         int_part = int(amount)
-        dec_part = round((amount - int_part) * 100)
+        dec_part = int(round((amount - int_part) * 100))
         formatted = "{:,}".format(int_part).replace(",", ".")
         return f"Rp. {formatted},{dec_part:02d}"
     except Exception:
         return "Rp. 0,00"
 
 def angka_ke_kata(n: int) -> str:
-    """Angka ke kata Bahasa Indonesia (up to jutaan)."""
     satuan = ["", "satu", "dua", "tiga", "empat", "lima", "enam",
               "tujuh", "delapan", "sembilan", "sepuluh", "sebelas"]
     if n == 0:
@@ -122,18 +204,33 @@ def angka_ke_kata(n: int) -> str:
             " " + angka_ke_kata(n % 1000) if n % 1000 else "")
     return str(n)
 
+def _extract_short_date(tanggal_full: str) -> str:
+    """
+    Ekstrak tanggal pendek Indonesia dari string panjang.
+    Contoh: '....(18-02-2026)' → '18 Februari 2026'
+    """
+    m = re.search(r'\((\d{1,2})-(\d{2})-(\d{4})\)', tanggal_full)
+    if m:
+        d, mon, y = m.group(1), m.group(2), m.group(3)
+        return f"{int(d)} {BULAN_ID.get(mon, mon)} {y}"
+    # Fallback: cari pola DD-MM-YYYY tanpa kurung
+    m2 = re.search(r'(\d{2})-(\d{2})-(\d{4})', tanggal_full)
+    if m2:
+        d, mon, y = m2.group(1), m2.group(2), m2.group(3)
+        return f"{int(d)} {BULAN_ID.get(mon, mon)} {y}"
+    return tanggal_full
+
+
 # ══════════════════════════════════════════════════════════════════
 #  WORD XML HELPERS
 # ══════════════════════════════════════════════════════════════════
 
 def _set_run_font(run, size_pt: float = FONT_SIZE_PT,
                   bold: bool = False, italic: bool = False):
-    """Set TNR pada semua script (ascii, hansi, cs)."""
     run.font.name = FONT_NAME
     run.font.size = Pt(size_pt)
     run.font.bold  = bold
     run.font.italic = italic
-    # Paksa font pada elemen XML agar tidak terpengaruh style default
     rPr = run._r.get_or_add_rPr()
     rFonts = rPr.find(qn("w:rFonts"))
     if rFonts is None:
@@ -143,23 +240,18 @@ def _set_run_font(run, size_pt: float = FONT_SIZE_PT,
         rFonts.set(qn(attr), FONT_NAME)
 
 def _add_tabstops(para, stops: list):
-    """
-    Tambahkan tab stop ke paragraf dengan dukungan WD_TAB_LEADER.DASHES.
-
-    stops : list of (pos_twips, leader)
-        leader = None   -> tab biasa
-        leader = 'dash' -> w:leader='hyphen'  (isian karakter hubung)
-        leader = 'dot'  -> w:leader='dot'
-    """
     _LMAP = {"dash": "hyphen", "dot": "dot", "line": "underscore"}
     pPr = para._p.get_or_add_pPr()
     tabs_el = pPr.find(qn("w:tabs"))
     if tabs_el is None:
         tabs_el = OxmlElement("w:tabs")
         pPr.append(tabs_el)
-    for pos, leader in stops:
+    for stop in stops:
+        pos    = stop[0]
+        leader = stop[1] if len(stop) > 1 else None
+        align  = stop[2] if len(stop) > 2 else "left"
         tab = OxmlElement("w:tab")
-        tab.set(qn("w:val"), "left")
+        tab.set(qn("w:val"), align)
         tab.set(qn("w:pos"), str(int(pos)))
         if leader is not None:
             tab.set(qn("w:leader"), _LMAP.get(leader, "hyphen"))
@@ -168,7 +260,6 @@ def _add_tabstops(para, stops: list):
 def _new_para(doc: Document, left_cm: float = 0.0, first_cm: float = 0.0,
               align=WD_ALIGN_PARAGRAPH.JUSTIFY,
               space_before_pt: float = 0, space_after_pt: float = 0) -> object:
-    """Buat paragraf kosong dengan format dasar."""
     p = doc.add_paragraph()
     p.alignment = align
     pf = p.paragraph_format
@@ -184,12 +275,12 @@ def _add_run(para, text: str, **kwargs) -> object:
     _set_run_font(run, **kwargs)
     return run
 
+
 # ══════════════════════════════════════════════════════════════════
-#  FORMAT_AUCTION_MULTILINE  (Core Logic — 3 Section Types)
+#  FORMAT_AUCTION_MULTILINE  (Core Logic)
 # ══════════════════════════════════════════════════════════════════
 
 def _build_description(item: dict) -> str:
-    """Baris 1 deskripsi kendaraan (tanpa Rangka)."""
     jenis = "roda dua" if item.get("jenis") == "motor" else "roda empat"
     return (
         f"Satu (1) unit kendaraan {jenis}, "
@@ -201,98 +292,301 @@ def _build_description(item: dict) -> str:
         f"Nomor Rangka"
     )
 
-# =====================================================================
-# FUNGSI PEMBANTU (HELPER) UNTUK MULTILINE DASH LEADER
-# =====================================================================
-
-def _line1(doc, txt):
-    """Baris pertama dengan nomor LOT dan garis dash hingga margin kanan."""
-    p = _new_para(doc, left_cm=TAB_CM, first_cm=-TAB_CM)
-    # Tab 1: Spasi setelah nomor, Tab 2: Garis dash ke margin kanan (8789 twips)
-    _add_tabstops(p, [(TAB_TWIPS, None), (CONTENT_W_TWIPS, "dash")])
-    _add_run(p, f"{txt}\t") # \t di akhir memicu garis dash ke kanan
+def _line1(doc, txt, align=WD_ALIGN_PARAGRAPH.LEFT):
+    """
+    Update: Default ke LEFT. 
+    Tab Stop Leader Dash sudah disiapkan di posisi margin kanan.
+    """
+    p = _new_para(doc, left_cm=TAB_CM, first_cm=-TAB_CM, align=align)
+    _add_tabstops(p, [
+        (TAB_DESC_START, None, "left"),
+        (TAB_RIGHT_EDGE, "dash", "right") # <--- Ini fitur Tab Manual Anda
+    ])
+    _add_run(p, f"{txt}\t")
     return p
 
-def _label_line_triple(doc, tab_L, tab_C, label, value):
-    """Baris label dengan 3 tab: Garis kiri, Garis tengah ke titik dua, dan Garis kanan."""
-    p = _new_para(doc, left_cm=TAB_CM)
-    # Tab 1: Ke label (dash), Tab 2: Ke titik dua (dash), Tab 3: Ke margin kanan (dash)
-    _add_tabstops(p, [(tab_L, "dash"), (tab_C, "dash"), (CONTENT_W_TWIPS, "dash")])
-    _add_run(p, f"\t{label}\t: {value}\t") # \t memicu semua garis
+
+# ──────────────────────────────────────────────────────────────────
+#  _label_line_triple  ← FIX v3.0
+#
+#  FORMAT LAMA (v2):
+#    \t  [dash ke pos 3500]  Nilai Limit  \t  [dash ke pos 5500]  : Rp.X,00  \t  [dash ke right]
+#    → "---Nilai Limit---: Rp. X,00---"   ← SALAH
+#
+#  FORMAT BARU (v3):
+#    Nilai Limit  \t  [dash ke pos 5500]  : Rp.X,00.
+#    → "Nilai Limit---------: Rp. X,00."  ← BENAR
+#
+#  Perubahan:
+#    1. Hapus tab stop pertama (pos 3500 dengan leader) → tidak ada dash sebelum label
+#    2. Hapus \t pertama dari teks         → label langsung mulai kiri (setelah indent)
+#    3. Hapus \t terakhir dari teks        → tidak ada trailing dash setelah value
+#    4. Efek samping: Pembeli alamat panjang tidak lagi memotong dash di tengah baris
+# ──────────────────────────────────────────────────────────────────
+
+def _label_line_triple(doc, label, value, align=WD_ALIGN_PARAGRAPH.LEFT):
+    """Update: Harga diset LEFT dengan Tab Stop Dash siap pakai."""
+    hanging_indent_twips = POS_COLON + 240 
+    left_cm = hanging_indent_twips / 567
+    first_line_cm = (POS_LABEL_L - hanging_indent_twips) / 567
+    
+    p = _new_para(doc, left_cm=left_cm, first_cm=first_line_cm, align=align)
+    
+    _add_tabstops(p, [
+        (POS_COLON, "dash", "left"), 
+        (POS_RIGHT, "dash", "right") # <--- Ini fitur Tab Manual Anda
+    ])
+    
+    _add_run(p, f"{label}\t: {value}\t")
     return p
 
-def _full_sep(doc):
-    """Garis pemisah penuh (Full-width dash separator)."""
-    p = _new_para(doc, left_cm=TAB_CM)
-    _add_tabstops(p, [(CONTENT_W_TWIPS, "dash")])
-    _add_run(p, "\t")
+def _label_pembeli(doc, label, value, align=WD_ALIGN_PARAGRAPH.LEFT):
+    """Update: Pembeli diset LEFT dengan Tab Stop Dash siap pakai."""
+    target_indent_twips = TAB_TWIPS 
+    left_cm = target_indent_twips / 567
+    first_line_cm = (POS_PEMBELI_L - target_indent_twips) / 567
+    
+    p = _new_para(doc, left_cm=left_cm, first_cm=first_line_cm, align=align)
+    
+    _add_tabstops(p, [
+        (POS_COLON, "dash", "left"), 
+        (POS_RIGHT, "dash", "right") # <--- Ini fitur Tab Manual Anda
+    ])
+    
+    _add_run(p, f"{label}\t: {value}\t")
     return p
-
-# =====================================================================
-# FUNGSI UTAMA ADD LOT ENTRY
-# =====================================================================
 
 def add_lot_entry(doc, item: dict, section: str, seq_num: int = None):
-    """
-    Tambahkan entri lot ke dokumen dengan struktur tanpa ruang kosong.
-    """
+    """Fungsi tunggal tanpa duplikasi untuk memproses setiap lot lelang."""
     lot_num   = item["lot"]
     no_rangka = item["no_rangka"]
     no_mesin  = item["no_mesin"]
     desc      = _build_description(item)
-
-    if seq_num is None:
-        seq_num = lot_num
-
-    lot_pfx  = f"Lot {lot_num}, " if section in ("SOLD", "TAP") else ""
-    list_num = lot_num if section == "LIMIT" else seq_num
+    lot_pfx   = f"Lot {lot_num}, " if section in ("SOLD", "TAP") else ""
+    list_num  = seq_num if seq_num else lot_num
 
     if section == "LIMIT":
-        limit_rp = format_rupiah(item.get("limit", 0))
-        # Baris 1: Deskripsi lengkap diakhiri koma dan garis hingga margin kanan
-        _line1(doc, f"{list_num}.\t{lot_pfx}{desc} {no_rangka}, Nomor Mesin {no_mesin},")
-        
-        # Baris 2: -- Nilai Limit -- : Rp. XX -- (Garis di semua celah)
-        _label_line_triple(doc, TAB_NILAI_L, TAB_NILAI_C, "Nilai Limit", f"{limit_rp}.")
-        
-        # Baris 3: Separator penuh
-        _full_sep(doc)
+        val = format_rupiah(item.get("limit", 0))
+        # Otomatis LEFT
+        _line1(doc, f"{list_num}.\t{desc} {no_rangka}, Nomor Mesin {no_mesin},")
+        _label_line_triple(doc, "Nilai Limit", f"{val}.")
 
     elif section == "SOLD":
-        harga_rp = format_rupiah(item.get("harga_terbentuk", 0))
-        pembeli  = item.get("nama_customer", "-")
-        alamat   = item.get("alamat_customer", "-")
+        val = format_rupiah(item.get("harga_terbentuk", 0))
+        pembeli = f"{item.get('nama_customer', '-')}, beralamat di {item.get('alamat_customer', '-')}"
         
-        # Baris 1: Deskripsi
+        # Otomatis LEFT
         _line1(doc, f"{list_num}.\t{lot_pfx}{desc} {no_rangka}, Nomor Mesin {no_mesin},")
-        
-        # Baris 2 & 3: Harga dan Pembeli dengan struktur garis penuh
-        _label_line_triple(doc, TAB_HARGA_L, TAB_HARGA_C, "Harga Lelang", f"{harga_rp}.")
-        _label_line_triple(doc, TAB_PEMB_L,  TAB_PEMB_C,  "Pembeli", f"{pembeli}, beralamat di {alamat}.")
-        
-        # Baris 4: Separator penuh
-        _full_sep(doc)
+        _label_line_triple(doc, "Harga Lelang", f"{val}.")
+        _label_pembeli(doc, "Pembeli", f"{pembeli}.")
 
     elif section == "TAP":
-        # Baris 1: Deskripsi diakhiri titik dan garis
-        _line1(doc, f"{list_num}.\t{lot_pfx}{desc} {no_rangka}, Nomor Mesin {no_mesin}.")
-        
-        # Baris 2: -- TAP -- (Garis kiri dan kanan)
-        p_tap = _new_para(doc, left_cm=TAB_CM)
-        # TAP berada di tengah (TAP_MID_POS) dengan garis penutup hingga akhir (CONTENT_W_TWIPS)
-        _add_tabstops(p_tap, [(TAP_MID_POS, "dash"), (CONTENT_W_TWIPS, "dash")])
-        _add_run(p_tap, "\tTAP\t")
+        # Paksa kembali ke JUSTIFY khusus untuk Section 3
+        _line1(doc, f"{list_num}.\t{lot_pfx}{desc} {no_rangka}, Nomor Mesin {no_mesin}.", align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+        p = _new_para(doc, left_cm=TAB_CM, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+        _add_tabstops(p, [(POS_MID, "dash", "center"), (POS_RIGHT, "dash", "right")])
+        _add_run(p, "\tTAP\t")
+
 
 # ══════════════════════════════════════════════════════════════════
-#  DYNAMIC EXCEL DATA READER (AUTO-DETECT COLUMNS)
+#  FOOTER BUILDER  ← NEW v3.0
+#
+#  Menggunakan nested Word IF fields dengan { PAGE } untuk
+#  menghasilkan ordinal Indonesia otomatis per halaman:
+#    Halaman 1 → "Pertama"
+#    Halaman 2 → "Kedua"
+#    ... dst sampai "Kelimabelas" (halaman 15)
+#
+#  Struktur XML nested IF:
+#    { IF { PAGE } = 1 "Pertama" { IF { PAGE } = 2 "Kedua" ... } }
+#
+#  Word akan me-refresh field ini saat dokumen dibuka atau Ctrl+A → F9.
 # ══════════════════════════════════════════════════════════════════
 
-# Kamus Alias: Daftar kemungkinan nama kolom (Case Insensitive)
+def _make_xml_run(text=None, is_instr=False, fld_char_type=None,
+                  size_half_pt=20, bold=False, italic=False):
+    """
+    Helper: buat <w:r> element untuk footer (tidak pakai Document API).
+    Mendukung: teks biasa, instrText field, fldChar.
+    """
+    r = OxmlElement("w:r")
+    rPr = OxmlElement("w:rPr")
+    rf = OxmlElement("w:rFonts")
+    for attr in ("w:ascii", "w:hAnsi", "w:cs", "w:eastAsia"):
+        rf.set(qn(attr), FONT_NAME)
+    sz = OxmlElement("w:sz")
+    sz.set(qn("w:val"), str(size_half_pt))
+    rPr.append(rf)
+    rPr.append(sz)
+    if bold:
+        b_el = OxmlElement("w:b")
+        rPr.append(b_el)
+    if italic:
+        i_el = OxmlElement("w:i")
+        rPr.append(i_el)
+    r.append(rPr)
+
+    if fld_char_type is not None:
+        fc = OxmlElement("w:fldChar")
+        fc.set(qn("w:fldCharType"), fld_char_type)
+        r.append(fc)
+    elif is_instr:
+        it = OxmlElement("w:instrText")
+        it.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+        it.text = str(text)
+        r.append(it)
+    else:
+        t = OxmlElement("w:t")
+        s = str(text) if text is not None else ""
+        if s.startswith(" ") or s.endswith(" "):
+            t.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+        t.text = s
+        r.append(t)
+    return r
+
+
+def _make_page_field_runs(**kwargs):
+    """Buat runs untuk field { PAGE } (5 runs: begin/instr/separate/cached/end)."""
+    return [
+        _make_xml_run(fld_char_type="begin", **kwargs),
+        _make_xml_run(" PAGE ", is_instr=True, **kwargs),
+        _make_xml_run(fld_char_type="separate", **kwargs),
+        _make_xml_run("1", **kwargs),
+        _make_xml_run(fld_char_type="end", **kwargs),
+    ]
+
+
+def _build_nested_if_ordinal(parent_el, ordinal_list, **run_kwargs):
+    """
+    Rekursif: bangun nested IF { PAGE } = N "OrdinalN" { IF ... } di parent_el.
+
+    Struktur akhir untuk [1="Pertama", 2="Kedua", 3="Ketiga"]:
+      [outer_begin][IF instr][{PAGE}][ = 1 "Pertama" instr]
+        [inner_begin][IF instr][{PAGE}][ = 2 "Kedua" instr]
+          [inner2_begin][IF instr][{PAGE}][ = 3 "Ketiga" "Berikutnya" instr]
+          [separate][Ketiga][inner2_end]
+        [separate][Kedua][inner_end]
+      [separate][Pertama][outer_end]
+
+    Word mengevaluasi mulai dari IF terluar. Hasilnya otomatis sesuai
+    nomor halaman saat dokumen di-refresh (Ctrl+A → F9 atau buka di Word).
+    """
+    if not ordinal_list:
+        return
+
+    page_num, ordinal = ordinal_list[0]
+    remaining = ordinal_list[1:]
+
+    # Buka field IF ini
+    parent_el.append(_make_xml_run(fld_char_type="begin", **run_kwargs))
+    parent_el.append(_make_xml_run(" IF ", is_instr=True, **run_kwargs))
+
+    # Kondisi: { PAGE }
+    for r in _make_page_field_runs(**run_kwargs):
+        parent_el.append(r)
+
+    if remaining:
+        # True value + false value = nested IF selanjutnya
+        parent_el.append(_make_xml_run(f" = {page_num} \"{ordinal}\" ",
+                                        is_instr=True, **run_kwargs))
+        _build_nested_if_ordinal(parent_el, remaining, **run_kwargs)
+    else:
+        # Terakhir: true + false "Berikutnya" sebagai fallback
+        parent_el.append(_make_xml_run(
+            f" = {page_num} \"{ordinal}\" \"Berikutnya\" ",
+            is_instr=True, **run_kwargs))
+
+    # Tutup field IF ini (separate + cached + end)
+    parent_el.append(_make_xml_run(fld_char_type="separate", **run_kwargs))
+    parent_el.append(_make_xml_run(ordinal, **run_kwargs))
+    parent_el.append(_make_xml_run(fld_char_type="end", **run_kwargs))
+
+
+def _add_footer(doc: Document, meta: dict):
+    """
+    Tambah footer ke setiap halaman dokumen.
+
+    Isi per halaman:
+      ─────────────────────── (garis pemisah)
+      Lembar [Kedua/Ketiga/...] dari Risalah Lelang Nomor X tanggal Y
+                                        Pejabat Lelang Kelas II,
+
+                                        ttd
+
+                                        [Nama Pejabat]
+
+    Ordinal "Kedua", "Ketiga", ... dihasilkan otomatis menggunakan
+    nested Word IF { PAGE } field — tidak perlu di-hardcode per halaman.
+    """
+    nomor    = meta.get("nomor_risalah", "027/10/19/2026")
+    tgl_raw  = meta.get("tanggal_lelang", "(18-02-2026)")
+    tgl_short = _extract_short_date(tgl_raw)
+    pejabat  = meta.get("nama_pejabat", "Rino Arief Rachman, S.H., M.H., M.Kn")
+
+    section = doc.sections[0]
+    footer  = section.footer
+    ft      = footer._element   # <w:ftr> element
+
+    # ── Bersihkan paragraf bawaan ─────────────────────────────────
+    for p_elem in list(ft.findall(qn("w:p"))):
+        ft.remove(p_elem)
+
+    # ── Helper: buat <w:p> kosong di footer ──────────────────────
+    def _new_ft_para(align="left", sp_before=0, sp_after=0, line_single=True):
+        p = OxmlElement("w:p")
+        pPr = OxmlElement("w:pPr")
+        sp = OxmlElement("w:spacing")
+        sp.set(qn("w:before"), str(int(sp_before * 20)))
+        sp.set(qn("w:after"),  str(int(sp_after  * 20)))
+        if line_single:
+            sp.set(qn("w:line"),     "240")
+            sp.set(qn("w:lineRule"), "auto")
+        pPr.append(sp)
+        if align != "left":
+            jc = OxmlElement("w:jc")
+            jc.set(qn("w:val"), align)
+            pPr.append(jc)
+        p.append(pPr)
+        ft.append(p)
+        return p
+
+    SIZE = 20   # 10pt dalam half-points
+
+    # ── Baris 1: Garis pemisah ────────────────────────────────────
+    p_sep = _new_ft_para(sp_before=0, sp_after=0)
+    p_sep.append(_make_xml_run(DASH_LINE, size_half_pt=SIZE))
+
+    # ── Baris 2: "Lembar [ORDINAL] dari Risalah Lelang ..." ───────
+    p_lembar = _new_ft_para(align="left", sp_before=2, sp_after=2)
+    p_lembar.append(_make_xml_run("Lembar ", size_half_pt=SIZE))
+    # Ordinal otomatis: nested IF { PAGE } field
+    _build_nested_if_ordinal(p_lembar, ORDINAL_ID, size_half_pt=SIZE)
+    p_lembar.append(_make_xml_run(
+        f" dari Risalah Lelang Nomor {nomor} tanggal {tgl_short}",
+        size_half_pt=SIZE))
+
+    # ── Blok Tanda Tangan (rata kanan) ───────────────────────────
+    sign_lines = [
+        ("Pejabat Lelang Kelas II,", False, False),
+        ("",                          False, False),
+        ("ttd",                       False, True),
+        ("",                          False, False),
+        (pejabat,                     True,  False),
+    ]
+    for text, bold, italic in sign_lines:
+        p = _new_ft_para(align="right", sp_before=0, sp_after=0)
+        p.append(_make_xml_run(text, size_half_pt=SIZE, bold=bold, italic=italic))
+
+
+# ══════════════════════════════════════════════════════════════════
+#  DYNAMIC EXCEL DATA READER
+# ══════════════════════════════════════════════════════════════════
+
 COLUMN_ALIASES = {
     "lot": ["LOT"],
     "nopol": ["NOPOL", "NOMOR POLISI", "NO POLISI", "NO. POLISI"],
     "merk": ["MERK", "MEREK"],
-    "model": ["SERIES", "MODEL", "TYPE", "TIPE"], 
+    "model": ["SERIES", "MODEL", "TYPE", "TIPE"],
     "no_mesin": ["NOMOR MESIN", "NO MESIN", "NO. MESIN", "MESIN"],
     "no_rangka": ["NOMOR RANGKA", "NO RANGKA", "NO. RANGKA", "RANGKA", "CHASSIS"],
     "tahun": ["TAHUN", "YEAR"],
@@ -300,72 +594,53 @@ COLUMN_ALIASES = {
     "status": ["STATUS"],
     "nama_customer": ["NAMA CUSTOMER", "NAMA CUST", "PEMBELI"],
     "alamat_customer": ["ALAMAT CUSTOMER", "ALAMAT CUST", "ALAMAT"],
-    "open_price": ["OPEN PRICE", "OPEN PRICE ALL", "LIMIT", "NILAI LIMIT"],
-    "harga_terbentuk": ["HARGA TERBENTUK", "LAKU", "HARGA LELANG", "RESULT PRICE"],
+    "open_price": ["HARGA AWAL", "OPEN PRICE", "OPEN PRICE ALL", "NILAI LIMIT"],
+    "harga_terbentuk": ["HARGA TERBENTUK", "HARGA LELANG", "LAKU", "RESULT PRICE"],
 }
 
 def _find_header_and_map(ws, log) -> tuple:
-    """
-    Memindai 15 baris pertama untuk mencari Header Row (biasanya ada tulisan LOT).
-    Mengembalikan (index_baris_header, dictionary_pemetaan_kolom)
-    """
     header_idx = -1
     col_map = {}
-    
     for idx, row in enumerate(ws.iter_rows(min_row=1, max_row=15, values_only=True), start=1):
         row_strs = [str(cell).strip().upper() for cell in row if cell is not None]
-        
         if "LOT" in row_strs:
             header_idx = idx
             for col_i, cell in enumerate(row):
                 if cell is None: continue
                 cell_val = str(cell).strip().upper()
-                
                 for key, aliases in COLUMN_ALIASES.items():
-                    if key not in col_map: 
+                    if key not in col_map:
                         if any(alias in cell_val for alias in aliases):
                             col_map[key] = col_i
-                            
                 if "TYPE" == cell_val and "type_col" not in col_map:
                     col_map["type_col"] = col_i
             break
-            
     if header_idx != -1:
         log(f"   🔍 Header terdeteksi otomatis pada baris ke-{header_idx}")
     return header_idx, col_map
 
-
 def read_excel_data(excel_path: str, sheet_name: str, log_cb=None) -> list:
-    """
-    Membaca data dari Excel secara DINAMIS tanpa patokan indeks mati.
-    """
     def log(msg):
-        if log_cb:
-            log_cb(msg)
+        if log_cb: log_cb(msg)
 
     wb  = openpyxl.load_workbook(excel_path, data_only=True)
     ws  = wb[sheet_name]
     jenis = "motor" if "MOTOR" in sheet_name.upper() else "mobil"
 
     header_idx, col_map = _find_header_and_map(ws, log)
-    
     if header_idx == -1 or "lot" not in col_map:
         log("❌ Gagal mendeteksi kolom! Pastikan ada baris Header yang mengandung kata 'LOT'.")
         return []
 
     items = []
-    
     for row in ws.iter_rows(min_row=header_idx + 1, values_only=True):
-        
         def _get(col_key):
             idx = col_map.get(col_key, -1)
-            if idx < 0 or idx >= len(row):
-                return None
+            if idx < 0 or idx >= len(row): return None
             return row[idx]
 
         lot_val = _get("lot")
-        if lot_val is None:
-            continue
+        if lot_val is None: continue
         try:
             lot_num = int(lot_val)
         except (ValueError, TypeError):
@@ -377,11 +652,11 @@ def read_excel_data(excel_path: str, sheet_name: str, log_cb=None) -> list:
             if type_idx < len(row):
                 model_raw = row[type_idx]
 
-        no_mesin_raw  = _get("no_mesin")
+        no_mesin_raw = _get("no_mesin")
         if isinstance(no_mesin_raw, float):
             no_mesin_raw = int(no_mesin_raw)
 
-        status_raw = safe_str(_get("status"), "Not Sold")
+        status_raw  = safe_str(_get("status"), "Not Sold")
         status_norm = status_raw.strip().upper()
 
         item = {
@@ -410,29 +685,24 @@ def read_excel_data(excel_path: str, sheet_name: str, log_cb=None) -> list:
 # ══════════════════════════════════════════════════════════════════
 
 def resolve_section(status: str) -> str:
-    """
-    'SOLD'     → 'SOLD'
-    'NOT SOLD' / 'NOTSOLD' → 'LIMIT'
-    'CANCEL' / 'TAP' / lainnya → 'TAP'
-    """
     s = status.upper().replace(" ", "")
-    if s == "SOLD":
+    if s in ("SOLD", "TERJUAL", "LAKU"):
         return "SOLD"
-    if s in ("NOTSOLD", ""):
+    if s in ("NOTSOLD", "TAKTERJUAL", "BELUMLAKU", ""):
         return "LIMIT"
-    return "TAP"   # CANCEL, TAP, dll
+    return "TAP"
 
 # ══════════════════════════════════════════════════════════════════
-#  DOCUMENT GENERATOR  (Main Engine)
+#  DOCUMENT GENERATOR
 # ══════════════════════════════════════════════════════════════════
 
 def _set_page_format(doc: Document):
     sec = doc.sections[0]
-    sec.page_width   = Cm(PAGE_W_CM)
-    sec.page_height  = Cm(PAGE_H_CM)
-    sec.left_margin  = Cm(MARGIN_L_CM)
-    sec.right_margin = Cm(MARGIN_R_CM)
-    sec.top_margin   = Cm(MARGIN_T_CM)
+    sec.page_width    = Cm(PAGE_W_CM)
+    sec.page_height   = Cm(PAGE_H_CM)
+    sec.left_margin   = Cm(MARGIN_L_CM)
+    sec.right_margin  = Cm(MARGIN_R_CM)
+    sec.top_margin    = Cm(MARGIN_T_CM)
     sec.bottom_margin = Cm(MARGIN_B_CM)
 
 def _clear_default_para(doc: Document):
@@ -440,11 +710,8 @@ def _clear_default_para(doc: Document):
         para._element.getparent().remove(para._element)
 
 def _add_header_section(doc: Document, meta: dict, items: list):
-    """Tulis bagian pembuka Risalah Lelang."""
-
     def center_bold(text, size=12, extra_space=0):
-        p = _new_para(doc, align=WD_ALIGN_PARAGRAPH.CENTER,
-                       space_after_pt=extra_space)
+        p = _new_para(doc, align=WD_ALIGN_PARAGRAPH.CENTER, space_after_pt=extra_space)
         _add_run(p, text, size_pt=size, bold=True)
 
     def justify_text(text, sp_after=3):
@@ -455,17 +722,14 @@ def _add_header_section(doc: Document, meta: dict, items: list):
         p = _new_para(doc, space_after_pt=0)
         _add_run(p, DASH_LINE)
 
-    # ── Judul ─────────────────────────────────────────────────────
     center_bold("RISALAH LELANG", size=14)
     center_bold(meta.get("nomor_risalah", "027/10/19/2026"), size=12, extra_space=4)
     separator()
 
-    # ── Intro Pejabat Lelang ──────────────────────────────────────
     tanggal = meta.get("tanggal_lelang",
         "Rabu, delapan belas bulan Februari tahun dua ribu dua puluh enam (18-02-2026)")
     pukul   = meta.get("pukul_lelang", "sebelas nol nol (11.00)")
-    pejabat = meta.get("nama_pejabat",
-        "Rino Arief Rachman, S.H., M.H., M.Kn")
+    pejabat = meta.get("nama_pejabat", "Rino Arief Rachman, S.H., M.H., M.Kn")
     jabatan_kep = meta.get("dasar_sk",
         "Surat Keputusan Menteri Keuangan Nomor 573/KM.6/2017 tanggal 20 Juni 2017")
     wilayah = meta.get("wilayah_jabatan",
@@ -487,11 +751,10 @@ def _add_header_section(doc: Document, meta: dict, items: list):
     )
     separator()
 
-    # ── Pelaksana / Penjual ───────────────────────────────────────
-    kuasa    = meta.get("nama_kuasa", "Adi Kurniawan Saputra")
-    nama_pt  = meta.get("nama_pt", "PT Anugerah Lelang Indonesia")
-    nomor_spl = meta.get("nomor_spl", "0075/SPL/ALI-SDA/II/2026")
-    tgl_spl   = meta.get("tgl_spl", "11 Februari 2026")
+    kuasa       = meta.get("nama_kuasa", "Adi Kurniawan Saputra")
+    nama_pt     = meta.get("nama_pt", "PT Anugerah Lelang Indonesia")
+    nomor_spl   = meta.get("nomor_spl", "0075/SPL/ALI-SDA/II/2026")
+    tgl_spl     = meta.get("tgl_spl", "11 Februari 2026")
     jabatan_kuasa = meta.get("jabatan_kuasa", "Branch Manager dan Kuasa Direksi")
 
     justify_text(
@@ -502,12 +765,8 @@ def _add_header_section(doc: Document, meta: dict, items: list):
     )
     separator()
 
-    # ── Daftar Barang intro ───────────────────────────────────────
     jml   = len(items)
     jml_w = angka_ke_kata(jml)
-    sold  = sum(1 for i in items if i["status"] == "SOLD")
-    notsold = sum(1 for i in items if i["status"] not in ("SOLD",))
-
     jenis_barang = "kendaraan bermotor roda dua" \
         if any(i["jenis"] == "motor" for i in items) else "kendaraan bermotor roda empat"
 
@@ -519,18 +778,16 @@ def _add_header_section(doc: Document, meta: dict, items: list):
     )
     separator()
 
+
 def _add_closing_section(doc: Document, meta: dict, items: list):
-    """Bagian penutup."""
     def justify_text(text, sp_after=0, sp_before=0):
         p = _new_para(doc, space_after_pt=sp_after, space_before_pt=sp_before)
         _add_run(p, text)
 
-    pejabat = meta.get("nama_pejabat",
-        "Rino Arief Rachman, S.H., M.H., M.Kn")
+    pejabat = meta.get("nama_pejabat", "Rino Arief Rachman, S.H., M.H., M.Kn")
 
-    sold_items = [i for i in items if i["status"] == "SOLD"]
-    notsold_items = [i for i in items if i["status"] == "NOT SOLD"]
-    tap_items = [i for i in items if i["status"] not in ("SOLD", "NOT SOLD")]
+    sold_items = [i for i in items if i["status"].strip().upper() in ("SOLD", "TERJUAL", "LAKU")]
+    tap_items  = [i for i in items if i["status"].strip().upper() not in ("SOLD", "TERJUAL", "LAKU")]
 
     sold_w = angka_ke_kata(len(sold_items))
     tap_w  = angka_ke_kata(len(tap_items))
@@ -546,135 +803,109 @@ def _add_closing_section(doc: Document, meta: dict, items: list):
     p_sep = _new_para(doc, space_after_pt=0)
     _add_run(p_sep, DASH_LINE)
 
-    # Tanda tangan
-    p_ttd = _new_para(doc,
-                       align=WD_ALIGN_PARAGRAPH.RIGHT,
+    p_ttd = _new_para(doc, align=WD_ALIGN_PARAGRAPH.RIGHT,
                        space_before_pt=36, space_after_pt=48)
     _add_run(p_ttd, "Pejabat Lelang Kelas II,")
 
-    p_name = _new_para(doc,
-                        align=WD_ALIGN_PARAGRAPH.RIGHT,
-                        space_after_pt=0)
+    p_name = _new_para(doc, align=WD_ALIGN_PARAGRAPH.RIGHT, space_after_pt=0)
     _add_run(p_name, pejabat, bold=True)
 
-def generate_doc(excel_path: str, output_path: str,
-                 sheet_name: str, meta: dict,
-                 progress_cb=None, log_cb=None) -> tuple:
-    """
-    Main engine: Excel → Word.
-    Returns (True, output_path) or (False, error_msg)
-    """
+def generate_doc(excel_path: str, output_path: str, sheet_name: str, meta: dict,
+                  progress_cb=None, log_cb=None) -> tuple:
     def log(m):
-        if log_cb:
-            log_cb(m)
-
+        if log_cb: log_cb(m)
     def prog(v):
-        if progress_cb:
-            progress_cb(v)
+        if progress_cb: progress_cb(v)
 
     try:
-        # ── Validasi ──────────────────────────────────────────────
         log(f"📂 Membaca: {os.path.basename(excel_path)}")
         wb_test = openpyxl.load_workbook(excel_path, read_only=True)
         if sheet_name not in wb_test.sheetnames:
-            raise ValueError(f"Sheet '{sheet_name}' tidak ditemukan! "
-                             f"Tersedia: {wb_test.sheetnames}")
+            raise ValueError(f"Sheet '{sheet_name}' tidak ditemukan! Tersedia: {wb_test.sheetnames}")
         wb_test.close()
         prog(10)
 
-        # ── Baca Data ─────────────────────────────────────────────
         log(f"📊 Membaca sheet: {sheet_name}")
         items = read_excel_data(excel_path, sheet_name, log_cb=log)
         if not items:
             raise ValueError("Tidak ada data lot yang dapat dibaca dari sheet ini.")
 
-        counts = {"SOLD": 0, "LIMIT": 0, "TAP": 0}
-        for item in items:
-            sec = resolve_section(item["status"])
-            item["_section"] = sec
-            counts[sec] += 1
+        STATUS_LAKU = ("SOLD", "TERJUAL", "LAKU")
+        sold_items = [i for i in items if i["status"].strip().upper() in STATUS_LAKU]
+        tap_items  = [i for i in items if i["status"].strip().upper() not in STATUS_LAKU]
 
-        log(f"   📌 SOLD: {counts['SOLD']} | LIMIT: {counts['LIMIT']} | TAP: {counts['TAP']}")
+        log(f"   📌 TOTAL: {len(items)} | SOLD: {len(sold_items)} | TAP: {len(tap_items)}")
         prog(25)
 
-        # ── Buat Dokumen ──────────────────────────────────────────
         log("📝 Membuat dokumen Word...")
         doc = Document()
         _set_page_format(doc)
         _clear_default_para(doc)
 
-        # Style default
         normal_style = doc.styles["Normal"]
         normal_style.font.name = FONT_NAME
         normal_style.font.size = Pt(FONT_SIZE_PT)
 
+        prog(28)
+
+        # ── Footer per-lembar ─────────────────────────────────────
+        log("📋 Menyiapkan footer per-lembar...")
+        _add_footer(doc, meta)
         prog(30)
 
-        # ── Header ────────────────────────────────────────────────
         log("📄 Menulis header dokumen...")
         _add_header_section(doc, meta, items)
         prog(40)
 
-        # ── Lot Entries — LIMIT → SOLD → TAP (sesuai struktur Risalah) ────
-        log("🚗 Memproses setiap lot (LIMIT → SOLD → TAP)...")
-        total = len(items)
-
-        limit_items = [i for i in items if i["_section"] == "LIMIT"]
-        sold_items  = [i for i in items if i["_section"] == "SOLD"]
-        tap_items   = [i for i in items if i["_section"] == "TAP"]
+        log("🚗 Memproses setiap lot...")
 
         def _sec_hdr(title: str):
             p = _new_para(doc, space_before_pt=4, space_after_pt=2)
             _add_run(p, title)
 
-        def _run_group(group, sec_name):
-            for seq, itm in enumerate(group, start=1):
-                try:
-                    add_lot_entry(doc, itm, sec_name, seq_num=seq)
-                except Exception as e:
-                    log(f"   ⚠️  Lot {itm['lot']} error: {e}")
-
-        processed = 0
-
-        # Seksi 1 — Nilai Limit
-        if limit_items:
-            log(f"   📋 LIMIT: {len(limit_items)} lot")
-            _run_group(limit_items, "LIMIT")
-            processed += len(limit_items)
-            prog(40 + int(processed / total * 45))
+        # Seksi 1 — Nilai Limit (Semua Item)
+        log(f"   📋 LIMIT: {len(items)} lot")
+        for seq, itm in enumerate(items, start=1):
+            try:
+                add_lot_entry(doc, itm, "LIMIT")
+            except Exception as e:
+                log(f"   ⚠️  Lot {itm['lot']} error: {e}")
+        prog(60)
 
         # Seksi 2 — Barang Laku Terjual
         if sold_items:
             log(f"   💰 SOLD: {len(sold_items)} lot")
-            p_sep = _new_para(doc, space_before_pt=6, space_after_pt=0)
+            p_sep = _new_para(doc, space_before_pt=12, space_after_pt=0)
             _add_run(p_sep, DASH_LINE)
             _sec_hdr("Barang laku terjual:")
-            p_sep2 = _new_para(doc, space_after_pt=0)
+            p_sep2 = _new_para(doc, space_after_pt=6)
             _add_run(p_sep2, DASH_LINE)
-            _run_group(sold_items, "SOLD")
-            processed += len(sold_items)
-            prog(40 + int(processed / total * 45))
+            for seq, itm in enumerate(sold_items, start=1):
+                try:
+                    add_lot_entry(doc, itm, "SOLD", seq_num=seq)
+                except Exception as e:
+                    log(f"   ⚠️  Lot {itm['lot']} error: {e}")
+        prog(80)
 
         # Seksi 3 — Barang Tidak Laku Terjual (TAP)
         if tap_items:
             log(f"   ❌ TAP: {len(tap_items)} lot")
-            p_sep = _new_para(doc, space_before_pt=6, space_after_pt=0)
+            p_sep = _new_para(doc, space_before_pt=12, space_after_pt=0)
             _add_run(p_sep, DASH_LINE)
             _sec_hdr("Barang tidak laku terjual:")
-            p_sep2 = _new_para(doc, space_after_pt=0)
+            p_sep2 = _new_para(doc, space_after_pt=6)
             _add_run(p_sep2, DASH_LINE)
-            _run_group(tap_items, "TAP")
-            processed += len(tap_items)
-            prog(40 + int(processed / total * 45))
+            for seq, itm in enumerate(tap_items, start=1):
+                try:
+                    add_lot_entry(doc, itm, "TAP", seq_num=seq)
+                except Exception as e:
+                    log(f"   ⚠️  Lot {itm['lot']} error: {e}")
+        prog(90)
 
-        prog(87)
-
-        # ── Penutup ───────────────────────────────────────────────
         log("✍️  Menulis bagian penutup...")
         _add_closing_section(doc, meta, items)
-        prog(93)
+        prog(95)
 
-        # ── Simpan ────────────────────────────────────────────────
         log(f"💾 Menyimpan ke: {os.path.basename(output_path)}")
         os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
         doc.save(output_path)
@@ -689,11 +920,11 @@ def generate_doc(excel_path: str, output_path: str,
         log(traceback.format_exc())
         return False, str(exc)
 
+
 # ══════════════════════════════════════════════════════════════════
 #  GUI  —  TKINTER  (Dark Theme)
 # ══════════════════════════════════════════════════════════════════
 
-# Palet warna
 C_BG     = "#0f172a"
 C_CARD   = "#1e293b"
 C_ACCENT = "#3b82f6"
@@ -715,45 +946,35 @@ class LelangApp(tk.Tk):
         self._output_path = None
         self._build_ui()
 
-    # ── UI Builder ────────────────────────────────────────────────
-
     def _build_ui(self):
-        # ── Topbar ────────────────────────────────────────────────
         topbar = tk.Frame(self, bg=C_CARD, height=60)
         topbar.pack(fill=tk.X)
         topbar.pack_propagate(False)
-
         tk.Label(topbar, text="⚖  LELANG APPS",
                  font=("Segoe UI", 18, "bold"),
                  bg=C_CARD, fg=C_ACCENT).pack(side=tk.LEFT, padx=20, pady=10)
-        tk.Label(topbar, text="Risalah Lelang Generator v2.0  |  python-docx  |  F4 / TNR 12pt",
-                 font=("Segoe UI", 9), bg=C_CARD, fg=C_MUTED).pack(
-                 side=tk.LEFT, padx=5, pady=15)
+        tk.Label(topbar, text="Risalah Lelang Generator v3.0  |  python-docx  |  F4 / Arial 12pt",
+                 font=("Segoe UI", 9), bg=C_CARD, fg=C_MUTED).pack(side=tk.LEFT, padx=5, pady=15)
 
-        # ── Body ──────────────────────────────────────────────────
         body = tk.Frame(self, bg=C_BG)
         body.pack(fill=tk.BOTH, expand=True, padx=16, pady=12)
 
-        # Kolom kiri (input + metadata)
         left = tk.Frame(body, bg=C_BG, width=470)
         left.pack(side=tk.LEFT, fill=tk.BOTH, padx=(0, 8))
         left.pack_propagate(False)
 
-        # Kolom kanan (progress + log)
         right = tk.Frame(body, bg=C_BG)
         right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         self._build_left(left)
         self._build_right(right)
 
-        # ── Statusbar ─────────────────────────────────────────────
         self._status_var = tk.StringVar(value="Siap. Pilih file Excel dan klik Generate.")
         tk.Label(self, textvariable=self._status_var,
                  bg="#080f1a", fg=C_MUTED, font=("Segoe UI", 9),
                  anchor=tk.W, padx=12, pady=3).pack(fill=tk.X, side=tk.BOTTOM)
 
     def _card(self, parent, title: str, pady_inner=12):
-        """Wrapper kartu berwarna gelap."""
         frame = tk.Frame(parent, bg=C_CARD, padx=14, pady=pady_inner)
         frame.pack(fill=tk.X, pady=(0, 10))
         tk.Label(frame, text=title, font=("Segoe UI", 9, "bold"),
@@ -774,43 +995,30 @@ class LelangApp(tk.Tk):
             tk.Button(row, text="…", font=("Segoe UI", 9, "bold"),
                       bg=C_BORDER, fg=C_TEXT, relief="flat", padx=10,
                       activebackground="#475569", activeforeground=C_TEXT,
-                      command=browse_cmd, cursor="hand2").pack(
-                      side=tk.LEFT, padx=(4, 0))
+                      command=browse_cmd, cursor="hand2").pack(side=tk.LEFT, padx=(4, 0))
 
     def _build_left(self, parent):
-        # ── Input File ────────────────────────────────────────────
         c1 = self._card(parent, "📁  INPUT & OUTPUT")
-
         self._excel_var  = tk.StringVar()
         self._output_var = tk.StringVar()
         self._sheet_var  = tk.StringVar(value="FIRMAN")
-
-        self._row(c1, "File Excel (.xlsx)", self._excel_var,
-                  browse_cmd=self._browse_excel)
-        self._row(c1, "Output File (.docx)", self._output_var,
-                  browse_cmd=self._browse_output)
-
+        self._row(c1, "File Excel (.xlsx)", self._excel_var, browse_cmd=self._browse_excel)
+        self._row(c1, "Output File (.docx)", self._output_var, browse_cmd=self._browse_output)
         tk.Label(c1, text="Sheet", bg=C_CARD, fg=C_MUTED,
                  font=("Segoe UI", 8)).pack(anchor=tk.W, pady=(6, 1))
         self._sheet_combo = ttk.Combobox(c1, textvariable=self._sheet_var,
-                                          values=["FIRMAN", "FIRMAN BATAL",
-                                                  "RL II MOTOR"],
-                                          state="readonly", width=30,
-                                          font=("Segoe UI", 9))
+                                          values=["FIRMAN", "FIRMAN BATAL", "RL II MOTOR", "RL II MOBIL"],
+                                          state="readonly", width=30, font=("Segoe UI", 9))
         self._sheet_combo.pack(anchor=tk.W)
 
-        # ── Metadata ──────────────────────────────────────────────
-        # Buat scrollable frame untuk metadata
         c2_outer = tk.Frame(parent, bg=C_CARD, padx=14, pady=10)
         c2_outer.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         tk.Label(c2_outer, text="📋  METADATA DOKUMEN",
                  font=("Segoe UI", 9, "bold"),
                  bg=C_CARD, fg=C_ACCENT).pack(anchor=tk.W, pady=(0, 6))
 
-        # Canvas + scrollbar untuk metadata
         canvas = tk.Canvas(c2_outer, bg=C_CARD, highlightthickness=0)
-        vsb = tk.Scrollbar(c2_outer, orient="vertical",
-                           command=canvas.yview, bg=C_CARD)
+        vsb = tk.Scrollbar(c2_outer, orient="vertical", command=canvas.yview, bg=C_CARD)
         canvas.configure(yscrollcommand=vsb.set)
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -818,49 +1026,29 @@ class LelangApp(tk.Tk):
         inner = tk.Frame(canvas, bg=C_CARD)
         canvas_window = canvas.create_window((0, 0), window=inner, anchor="nw")
 
-        def _on_resize(e):
-            canvas.itemconfig(canvas_window, width=e.width)
+        def _on_resize(e): canvas.itemconfig(canvas_window, width=e.width)
         canvas.bind("<Configure>", _on_resize)
-
-        def _on_frame_configure(e):
-            canvas.configure(scrollregion=canvas.bbox("all"))
+        def _on_frame_configure(e): canvas.configure(scrollregion=canvas.bbox("all"))
         inner.bind("<Configure>", _on_frame_configure)
-
-        # Scroll dengan mouse wheel
-        def _on_mousewheel(e):
-            canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+        def _on_mousewheel(e): canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
         canvas.bind_all("<MouseWheel>", _on_mousewheel)
 
         self._meta_vars = {}
         meta_fields = [
-            ("nomor_risalah",   "Nomor Risalah",
-             "027/10/19/2026"),
-            ("tanggal_lelang",  "Tanggal Lelang (teks lengkap)",
-             "Rabu, delapan belas bulan Februari tahun dua ribu dua puluh enam (18-02-2026)"),
-            ("pukul_lelang",    "Pukul Lelang",
-             "sebelas nol nol (11.00)"),
-            ("nama_pejabat",    "Nama Pejabat Lelang",
-             "Rino Arief Rachman, S.H., M.H., M.Kn"),
-            ("dasar_sk",        "Dasar SK Pejabat",
-             "Surat Keputusan Menteri Keuangan Nomor 573/KM.6/2017 tanggal 20 Juni 2017"),
-            ("wilayah_jabatan", "Wilayah Jabatan",
-             "Kota Surabaya, Kabupaten Sidoarjo, dan sekitarnya"),
-            ("alamat_pejabat",  "Alamat Pejabat Lelang",
-             "Jalan Perumahan Oasis Village Blok B-1, Semampir, Sedati, Kabupaten Sidoarjo"),
-            ("tempat_lelang",   "Tempat Pelaksanaan Lelang",
-             "Jalan Panglima Sudirman Nomor 17 B, Medaeng Taman, Kabupaten Sidoarjo"),
-            ("nama_kuasa",      "Nama Kuasa Penjual",
-             "Adi Kurniawan Saputra"),
-            ("jabatan_kuasa",   "Jabatan Kuasa Penjual",
-             "Branch Manager dan Kuasa Direksi"),
-            ("nama_pt",         "Nama PT / Penjual",
-             "PT Anugerah Lelang Indonesia"),
-            ("nomor_spl",       "Nomor SPL",
-             "0075/SPL/ALI-SDA/II/2026"),
-            ("tgl_spl",         "Tanggal SPL",
-             "11 Februari 2026"),
+            ("nomor_risalah",   "Nomor Risalah",                 "027/10/19/2026"),
+            ("tanggal_lelang",  "Tanggal Lelang (teks lengkap)", "Rabu, delapan belas bulan Februari tahun dua ribu dua puluh enam (18-02-2026)"),
+            ("pukul_lelang",    "Pukul Lelang",                  "sebelas nol nol (11.00)"),
+            ("nama_pejabat",    "Nama Pejabat Lelang",           "Rino Arief Rachman, S.H., M.H., M.Kn"),
+            ("dasar_sk",        "Dasar SK Pejabat",              "Surat Keputusan Menteri Keuangan Nomor 573/KM.6/2017 tanggal 20 Juni 2017"),
+            ("wilayah_jabatan", "Wilayah Jabatan",               "Kota Surabaya, Kabupaten Sidoarjo, dan sekitarnya"),
+            ("alamat_pejabat",  "Alamat Pejabat Lelang",         "Jalan Perumahan Oasis Village Blok B-1, Semampir, Sedati, Kabupaten Sidoarjo"),
+            ("tempat_lelang",   "Tempat Pelaksanaan Lelang",     "Jalan Panglima Sudirman Nomor 17 B, Medaeng Taman, Kabupaten Sidoarjo"),
+            ("nama_kuasa",      "Nama Kuasa Penjual",            "Adi Kurniawan Saputra"),
+            ("jabatan_kuasa",   "Jabatan Kuasa Penjual",         "Branch Manager dan Kuasa Direksi"),
+            ("nama_pt",         "Nama PT / Penjual",             "PT Anugerah Lelang Indonesia"),
+            ("nomor_spl",       "Nomor SPL",                     "0075/SPL/ALI-SDA/II/2026"),
+            ("tgl_spl",         "Tanggal SPL",                   "11 Februari 2026"),
         ]
-
         for key, label, default in meta_fields:
             tk.Label(inner, text=label, bg=C_CARD, fg=C_MUTED,
                      font=("Segoe UI", 8)).pack(anchor=tk.W, pady=(5, 1))
@@ -871,64 +1059,46 @@ class LelangApp(tk.Tk):
             e.pack(fill=tk.X)
             self._meta_vars[key] = var
 
-        # ── Tombol Generate & Buka ────────────────────────────────
         btn_frame = tk.Frame(parent, bg=C_BG, pady=8)
         btn_frame.pack(fill=tk.X)
 
         self._gen_btn = tk.Button(
-            btn_frame,
-            text="⚡  GENERATE RISALAH LELANG",
-            font=("Segoe UI", 12, "bold"),
-            bg=C_ACCENT, fg="black",
+            btn_frame, text="⚡  GENERATE RISALAH LELANG",
+            font=("Segoe UI", 12, "bold"), bg=C_ACCENT, fg="black",
             activebackground="#2563eb", activeforeground="white",
             relief="flat", bd=0, padx=20, pady=12,
-            cursor="hand2", command=self._on_generate
-        )
+            cursor="hand2", command=self._on_generate)
         self._gen_btn.pack(fill=tk.X)
 
         self._open_btn = tk.Button(
-            btn_frame,
-            text="📄  Buka Dokumen",
-            font=("Segoe UI", 10, "bold"),
-            bg=C_GREEN, fg="black",
+            btn_frame, text="📄  Buka Dokumen",
+            font=("Segoe UI", 10, "bold"), bg=C_GREEN, fg="black",
             activebackground="#16a34a", activeforeground="white",
             relief="flat", bd=0, padx=20, pady=8,
-            cursor="hand2", command=self._on_open_output,
-            state="disabled"
-        )
+            cursor="hand2", command=self._on_open_output, state="disabled")
         self._open_btn.pack(fill=tk.X, pady=(6, 0))
 
     def _build_right(self, parent):
-        # ── Progress ──────────────────────────────────────────────
         pc = self._card(parent, "⚙  PROGRESS", pady_inner=12)
-
         self._prog_var = tk.IntVar(value=0)
         style = ttk.Style(self)
         style.configure("Lelang.Horizontal.TProgressbar",
                         troughcolor=C_CARD, background=C_ACCENT,
-                        bordercolor=C_CARD, lightcolor=C_ACCENT,
-                        darkcolor=C_ACCENT)
-        self._prog_bar = ttk.Progressbar(pc, variable=self._prog_var,
-                                          maximum=100, length=300,
-                                          style="Lelang.Horizontal.TProgressbar")
+                        bordercolor=C_CARD, lightcolor=C_ACCENT, darkcolor=C_ACCENT)
+        self._prog_bar = ttk.Progressbar(pc, variable=self._prog_var, maximum=100,
+                                          length=300, style="Lelang.Horizontal.TProgressbar")
         self._prog_bar.pack(fill=tk.X, pady=(0, 4))
-
         self._prog_label = tk.Label(pc, text="Menunggu input...",
-                                     bg=C_CARD, fg=C_MUTED,
-                                     font=("Segoe UI", 8))
+                                     bg=C_CARD, fg=C_MUTED, font=("Segoe UI", 8))
         self._prog_label.pack(anchor=tk.W)
 
-        # ── Stats ─────────────────────────────────────────────────
         sc = self._card(parent, "📊  STATISTIK TERAKHIR", pady_inner=10)
         stat_row = tk.Frame(sc, bg=C_CARD)
         stat_row.pack(fill=tk.X)
-
         self._stat_vars = {}
         for label, key, color in [
-            ("Total Lot", "total", C_TEXT),
-            ("SOLD",      "sold",  C_GREEN),
-            ("LIMIT",     "limit", C_ACCENT),
-            ("TAP",       "tap",   C_RED),
+            ("Total Lot", "total", C_TEXT), ("SOLD", "sold", C_GREEN),
+            ("LIMIT",     "limit", C_ACCENT), ("TAP", "tap", C_RED),
         ]:
             col = tk.Frame(stat_row, bg=C_CARD)
             col.pack(side=tk.LEFT, expand=True, fill=tk.X)
@@ -939,55 +1109,39 @@ class LelangApp(tk.Tk):
             tk.Label(col, text=label, bg=C_CARD, fg=C_MUTED,
                      font=("Segoe UI", 8)).pack()
 
-        # ── Log ───────────────────────────────────────────────────
         lc_outer = tk.Frame(parent, bg=C_CARD, padx=14, pady=12)
         lc_outer.pack(fill=tk.BOTH, expand=True)
         tk.Label(lc_outer, text="📋  LOG AKTIVITAS",
-                 font=("Segoe UI", 9, "bold"),
-                 bg=C_CARD, fg=C_ACCENT).pack(anchor=tk.W, pady=(0, 6))
-
+                 font=("Segoe UI", 9, "bold"), bg=C_CARD, fg=C_ACCENT).pack(
+                 anchor=tk.W, pady=(0, 6))
         log_inner = tk.Frame(lc_outer, bg="#040a14")
         log_inner.pack(fill=tk.BOTH, expand=True)
-
         self._log_text = tk.Text(
-            log_inner,
-            bg="#040a14", fg="#a3e635",
-            font=("Cascadia Code", 8) if self._font_exists("Cascadia Code")
-                 else ("Consolas", 8),
-            relief="flat", bd=0, state="disabled",
-            wrap=tk.WORD, padx=6, pady=4
-        )
-        vsb = tk.Scrollbar(log_inner, command=self._log_text.yview,
-                           bg="#040a14")
+            log_inner, bg="#040a14", fg="#a3e635",
+            font=("Cascadia Code", 8) if self._font_exists("Cascadia Code") else ("Consolas", 8),
+            relief="flat", bd=0, state="disabled", wrap=tk.WORD, padx=6, pady=4)
+        vsb = tk.Scrollbar(log_inner, command=self._log_text.yview, bg="#040a14")
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
         self._log_text.config(yscrollcommand=vsb.set)
         self._log_text.pack(fill=tk.BOTH, expand=True)
-
-        self._log("🚀 LELANG APPS siap digunakan")
+        self._log("🚀 LELANG APPS v3.0 siap digunakan")
         self._log(f"📐 Kertas F4 ({PAGE_W_CM}×{PAGE_H_CM} cm)  |  "
                   f"Margin L:{MARGIN_L_CM}cm R:{MARGIN_R_CM}cm T:{MARGIN_T_CM}cm B:{MARGIN_B_CM}cm")
-        self._log(f"🔤 Font: {FONT_NAME} {FONT_SIZE_PT}pt  |  "
-                  f"Tab stop: {TAB_TWIPS} twips")
-
-    # ── Event Handlers ────────────────────────────────────────────
+        self._log("🆕 v3.0: Fix label dash + Footer Lembar otomatis per halaman")
 
     def _browse_excel(self):
         path = filedialog.askopenfilename(
             title="Pilih File Excel",
-            filetypes=[("Excel", "*.xlsx *.xls"), ("All", "*.*")]
-        )
-        if not path:
-            return
+            filetypes=[("Excel", "*.xlsx *.xls"), ("All", "*.*")])
+        if not path: return
         self._excel_var.set(path)
         base = os.path.splitext(path)[0]
         ts = datetime.now().strftime("%Y%m%d_%H%M")
         self._output_var.set(f"{base}_RISALAH_{ts}.docx")
         self._log(f"📂 File: {os.path.basename(path)}")
-
-        # Auto-detect sheets
         try:
             wb = openpyxl.load_workbook(path, read_only=True)
-            known = ["FIRMAN", "FIRMAN BATAL", "RL II MOTOR"]
+            known = ["FIRMAN", "FIRMAN BATAL", "RL II MOTOR", "RL II MOBIL"]
             available = [s for s in known if s in wb.sheetnames]
             wb.close()
             if available:
@@ -999,27 +1153,20 @@ class LelangApp(tk.Tk):
 
     def _browse_output(self):
         path = filedialog.asksaveasfilename(
-            title="Simpan Sebagai",
-            defaultextension=".docx",
-            filetypes=[("Word", "*.docx"), ("All", "*.*")]
-        )
-        if path:
-            self._output_var.set(path)
+            title="Simpan Sebagai", defaultextension=".docx",
+            filetypes=[("Word", "*.docx"), ("All", "*.*")])
+        if path: self._output_var.set(path)
 
     def _on_generate(self):
-        excel = self._excel_var.get().strip()
+        excel  = self._excel_var.get().strip()
         output = self._output_var.get().strip()
-        sheet = self._sheet_var.get().strip()
-
+        sheet  = self._sheet_var.get().strip()
         if not excel:
-            messagebox.showerror("Input", "Pilih file Excel terlebih dahulu!")
-            return
+            messagebox.showerror("Input", "Pilih file Excel terlebih dahulu!"); return
         if not os.path.exists(excel):
-            messagebox.showerror("Input", f"File tidak ditemukan:\n{excel}")
-            return
+            messagebox.showerror("Input", f"File tidak ditemukan:\n{excel}"); return
         if not output:
-            messagebox.showerror("Input", "Tentukan path output!")
-            return
+            messagebox.showerror("Input", "Tentukan path output!"); return
 
         meta = {k: v.get().strip() for k, v in self._meta_vars.items()}
         self._gen_btn.config(state="disabled", text="⏳  Sedang diproses...")
@@ -1031,22 +1178,14 @@ class LelangApp(tk.Tk):
 
         def worker():
             success, result = generate_doc(
-                excel_path=excel,
-                output_path=output,
-                sheet_name=sheet,
-                meta=meta,
-                progress_cb=self._set_progress,
-                log_cb=self._log,
-            )
-
+                excel_path=excel, output_path=output, sheet_name=sheet,
+                meta=meta, progress_cb=self._set_progress, log_cb=self._log)
             def finish():
-                self._gen_btn.config(state="normal",
-                                     text="⚡  GENERATE RISALAH LELANG")
+                self._gen_btn.config(state="normal", text="⚡  GENERATE RISALAH LELANG")
                 if success:
                     self._output_path = result
                     self._open_btn.config(state="normal")
                     self._set_status(f"✅ Berhasil: {os.path.basename(result)}")
-                    # Update stats
                     try:
                         items = read_excel_data(excel, sheet)
                         total = len(items)
@@ -1059,14 +1198,10 @@ class LelangApp(tk.Tk):
                         self._stat_vars["tap"].set(str(tap))
                     except Exception:
                         pass
-                    messagebox.showinfo(
-                        "✅ Berhasil!",
-                        f"Risalah Lelang berhasil dibuat!\n\n{result}"
-                    )
+                    messagebox.showinfo("✅ Berhasil!", f"Risalah Lelang berhasil dibuat!\n\n{result}")
                 else:
                     self._set_status("❌ Gagal! Cek log untuk detail.")
                     messagebox.showerror("❌ Error", f"Gagal:\n{result[:300]}")
-
             self.after(0, finish)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -1074,19 +1209,16 @@ class LelangApp(tk.Tk):
     def _on_open_output(self):
         path = self._output_path or self._output_var.get().strip()
         if not path or not os.path.exists(path):
-            messagebox.showwarning("Peringatan", "File output tidak ditemukan!")
-            return
+            messagebox.showwarning("Peringatan", "File output tidak ditemukan!"); return
         try:
             if sys.platform.startswith("darwin"):
                 subprocess.run(["open", path], check=True)
             elif sys.platform.startswith("win"):
-                os.startfile(path)  # type: ignore
+                os.startfile(path)
             else:
                 subprocess.run(["xdg-open", path], check=True)
         except Exception as e:
             messagebox.showerror("Error", f"Tidak bisa membuka file:\n{e}")
-
-    # ── UI Helpers ────────────────────────────────────────────────
 
     def _log(self, msg: str):
         def _update():
@@ -1104,16 +1236,14 @@ class LelangApp(tk.Tk):
         self.after(0, _update)
 
     def _set_status(self, msg: str):
-        def _update():
-            self._status_var.set(msg)
+        def _update(): self._status_var.set(msg)
         self.after(0, _update)
 
     @staticmethod
     def _font_exists(name: str) -> bool:
         try:
             import tkinter.font as tkfont
-            fonts = tkfont.families()
-            return name in fonts
+            return name in tkfont.families()
         except Exception:
             return False
 
@@ -1123,5 +1253,11 @@ class LelangApp(tk.Tk):
 # ══════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    app = LelangApp()
-    app.mainloop()
+    try:
+        check_license()
+        app = LelangApp()
+        app.mainloop()
+    except Exception as e:
+        root_err = tk.Tk()
+        root_err.withdraw()
+        messagebox.showerror("Fatal Error", f"Aplikasi gagal dibuka:\n{e}")
