@@ -891,7 +891,7 @@ def main():
       <div>
         <div style="font-size:1.4rem;font-weight:800;color:#e2e8f0">LELANG APPS — PL2RINO</div>
         <div style="font-size:0.8rem;color:#94a3b8">
-            Risalah Lelang Generator v4.0   |  F4 / Arial 12pt  |  #by.haniffraihan
+            Risalah Lelang Generator v4.0   |  #by.haniffraihan
         </div>
       </div>
     </div>
