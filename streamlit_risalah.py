@@ -889,9 +889,9 @@ def main():
                 border-left:4px solid #3b82f6;display:flex;align-items:center;gap:16px">
       <span style="font-size:2rem">⚖️</span>
       <div>
-        <div style="font-size:1.4rem;font-weight:800;color:#e2e8f0">LELANG APPS — Web Edition</div>
+        <div style="font-size:1.4rem;font-weight:800;color:#e2e8f0">LELANG APPS — PL2RINO</div>
         <div style="font-size:0.8rem;color:#94a3b8">
-            Risalah Lelang Generator v4.0  |  python-docx  |  F4 / Arial 12pt  |  Streamlit
+            Risalah Lelang Generator v4.0   |  F4 / Arial 12pt  |  #by.haniffraihan
         </div>
       </div>
     </div>
