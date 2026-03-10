@@ -864,75 +864,24 @@ def main():
     .stTabs [data-baseweb="tab-list"] { background: #1e293b; border-radius: 8px; padding: 4px; }
     .stTabs [data-baseweb="tab"] { color: #94a3b8; }
     .stTabs [aria-selected="true"] { background: #3b82f6 !important; color: white !important; border-radius: 6px; }
-
-    /* ── Custom metric cards — tidak pernah terpotong ─────────── */
-    .mc-row {
-        display: flex; gap: 10px; margin: 12px 0;
-        flex-wrap: wrap;
+    /* Metric widget override — teks tidak terpotong */
+    div[data-testid="stMetric"] {
+        background: #1e293b; border: 1px solid #334155;
+        border-radius: 12px; padding: 14px 10px;
     }
-    .mc-card {
-        flex: 1; min-width: 120px;
-        background: #1e293b;
-        border: 1px solid #334155;
-        border-radius: 12px;
-        padding: 14px 12px 10px 12px;
-        text-align: center;
-        box-sizing: border-box;
+    div[data-testid="stMetricValue"] > div {
+        color: #e2e8f0; font-size: 1.35rem !important;
+        word-break: break-word; white-space: normal !important;
+        line-height: 1.2;
     }
-    .mc-label {
-        font-size: 0.72rem; color: #64748b;
+    div[data-testid="stMetricLabel"] > div {
+        color: #94a3b8; font-size: 0.72rem;
         text-transform: uppercase; letter-spacing: .04em;
-        margin-bottom: 6px; line-height: 1.3;
-        white-space: normal; word-break: break-word;
     }
-    .mc-value {
-        font-size: 1.55rem; font-weight: 800;
-        color: #e2e8f0; line-height: 1.1;
-        white-space: normal; word-break: break-word;
-    }
-    .mc-delta {
-        font-size: 0.75rem; margin-top: 5px;
-        color: #4ade80; font-weight: 600;
-    }
-    .mc-delta.neg { color: #f87171; }
-    .mc-value.accent-blue  { color: #60a5fa; }
-    .mc-value.accent-green { color: #4ade80; }
-    .mc-value.accent-amber { color: #fbbf24; }
-    .mc-value.accent-red   { color: #f87171; }
-
-    div[data-testid="stMetricValue"] > div { color: #e2e8f0; }
+    div[data-testid="stMetricDelta"] > div { font-size: 0.72rem; }
     .stDownloadButton button { width: 100%; }
     </style>
     """, unsafe_allow_html=True)
-
-    # ── Helper: render metric cards sebagai HTML (tidak terpotong) ─
-    def _mc(cards: list) -> None:
-        """
-        Render satu baris metric cards pakai HTML custom.
-        cards = list of dict:
-          { "label": str, "value": str, "delta": str|None,
-            "accent": "blue"|"green"|"amber"|"red"|None }
-
-        BEFORE: st.metric("Total Limit", f"Rp {val/1e6:.1f}M")
-                → nilai terpotong jika terlalu panjang
-
-        AFTER:  _mc([{"label":"Total Limit","value":_fmt_currency(val)}])
-                → nilai auto-wrap, tidak pernah terpotong
-        """
-        items_html = ""
-        for c in cards:
-            accent = f" accent-{c.get('accent','')}" if c.get("accent") else ""
-            delta_html = ""
-            if c.get("delta"):
-                neg = "neg" if str(c["delta"]).startswith("-") else ""
-                delta_html = f'<div class="mc-delta {neg}">{c["delta"]}</div>'
-            items_html += f"""
-            <div class="mc-card">
-              <div class="mc-label">{c["label"]}</div>
-              <div class="mc-value{accent}">{c["value"]}</div>
-              {delta_html}
-            </div>"""
-        st.markdown(f'<div class="mc-row">{items_html}</div>', unsafe_allow_html=True)
 
     # ─── Top Bar ─────────────────────────────────────────────────
     st.markdown("""
@@ -1066,15 +1015,14 @@ def main():
 
                 pct_sold  = n_sold / len(all_items) * 100 if all_items else 0
                 pct_harga = sold_val / lim_val * 100 if lim_val else 0
-                _mc([
-                    {"label": "Total Lot",      "value": str(len(all_items)), "accent": "blue"},
-                    {"label": "Terjual (SOLD)",  "value": str(n_sold),        "accent": "green",
-                     "delta": f"↑ {pct_sold:.0f}%"},
-                    {"label": "TAP",             "value": str(n_tap),          "accent": "red"},
-                    {"label": "Total Limit",     "value": _fmt_currency(lim_val), "accent": "amber"},
-                    {"label": "Harga Terbentuk", "value": _fmt_currency(sold_val), "accent": "green",
-                     "delta": f"↑ {pct_harga:.1f}% dari limit"},
-                ])
+                c1, c2, c3, c4, c5 = st.columns(5)
+                c1.metric("Total Lot",       len(all_items))
+                c2.metric("Terjual (SOLD)",  n_sold,
+                           delta=f"↑ {pct_sold:.0f}%")
+                c3.metric("TAP",             n_tap)
+                c4.metric("Total Limit",     _fmt_currency(lim_val))
+                c5.metric("Harga Terbentuk", _fmt_currency(sold_val),
+                           delta=f"↑ {pct_harga:.1f}%")
 
             # ── Download Buttons ──────────────────────────────
             st.divider()
@@ -1157,20 +1105,18 @@ def main():
         # ── Hitung Statistik ─────────────────────────────────
         fig_pie, fig_bar, stat = build_stat_charts(all_items, display_name)
 
-        # ── Metrics ─── BEFORE: st.metric terpotong "Rp 108..."
-        #               AFTER:  _mc() HTML card tidak terpotong
+        # ── Metrics ── pakai st.metric native + _fmt_currency() agar tidak terpotong
         pct_sold_s  = stat["sold"]  / stat["total"] * 100 if stat["total"] else 0
         pct_harga_s = stat["pencapaian"]
-        _mc([
-            {"label": "Total Lot",       "value": str(stat["total"]),              "accent": "blue"},
-            {"label": "Terjual (SOLD)",   "value": str(stat["sold"]),              "accent": "green",
-             "delta": f"↑ {pct_sold_s:.0f}%"},
-            {"label": "TAP",              "value": str(stat["tap"]),               "accent": "red"},
-            {"label": "Not Sold (LIMIT)", "value": str(stat["limit"]),             "accent": "amber"},
-            {"label": "Total Limit",      "value": _fmt_currency(stat["total_limit"]), "accent": "amber"},
-            {"label": "Harga Terbentuk",  "value": _fmt_currency(stat["total_harga"]), "accent": "green",
-             "delta": f"↑ {pct_harga_s:.1f}% dari limit"},
-        ])
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
+        c1.metric("Total Lot",       stat["total"])
+        c2.metric("Terjual (SOLD)",  stat["sold"],
+                   delta=f"↑ {pct_sold_s:.0f}%")
+        c3.metric("TAP",             stat["tap"])
+        c4.metric("Not Sold",        stat["limit"])
+        c5.metric("Total Limit",     _fmt_currency(stat["total_limit"]))
+        c6.metric("Harga Terbentuk", _fmt_currency(stat["total_harga"]),
+                   delta=f"↑ {pct_harga_s:.1f}%")
 
         st.divider()
 
