@@ -3,7 +3,7 @@
 LELANG APPS - Aplikasi Desktop Konversi Risalah Lelang
 Mengonversi data Excel ke Risalah Lelang Word (.docx)
 
-Author   : Senior Python Developer
+Author   : HANIF RAIHAN
 Version  : 3.0 (Fix: label dash, multiline, footer per-lembar)
 Standard : OpenXML / python-docx (F4, Arial 12pt)
 
@@ -25,6 +25,7 @@ import os
 import sys
 import subprocess
 import re
+import textwrap # Tambahkan ini di bagian atas bersama import lainnya
 from datetime import datetime
 
 import openpyxl
@@ -97,8 +98,8 @@ def check_license():
 FONT_NAME      = "Arial"
 FONT_SIZE_PT   = 12
 
-PAGE_W_CM      = 21.0
-PAGE_H_CM      = 33.0
+PAGE_W_CM      = 21.59
+PAGE_H_CM      = 33.02
 MARGIN_L_CM    = 4.0
 MARGIN_R_CM    = 1.5
 MARGIN_T_CM    = 2.0
@@ -107,16 +108,17 @@ MARGIN_B_CM    = 2.0
 CONTENT_W_CM   = PAGE_W_CM - MARGIN_L_CM - MARGIN_R_CM  # 15.5
 TAB_TWIPS       = 600
 TAB_CM          = TAB_TWIPS / 567
-
-CONTENT_W_TWIPS  = int(CONTENT_W_CM * 567)   # 8788 twips
+CONTENT_W_TWIPS  = int(CONTENT_W_CM * 567)   # 9123 twips
 
 # --- PENGATURAN JARAK DASH & POSISI TENGAH ---
 POS_LABEL_L      = 600   # Jarak dash sebelum teks label (Limit/Harga/Pembeli)
 POS_COLON        = 3600   # TITIK DUA DI TENGAH PARAGRAF
 POS_PEMBELI_L    = 600   # Jarak dash sebelum teks label "Pembeli"
-POS_RIGHT        = CONTENT_W_TWIPS - 100 # Batas kanan mentok
 POS_MID          = CONTENT_W_TWIPS // 2
 TAB_DESC_START   = TAB_TWIPS
+POS_RIGHT_CM = 16.0 
+POS_RIGHT    = int(POS_RIGHT_CM * 567) # 9072 twips
+
 
 # --- ALIAS (Mencegah Error Variable Not Defined) ---
 TAB_FULL         = POS_RIGHT
@@ -258,9 +260,11 @@ def _add_tabstops(para, stops: list):
         tabs_el.append(tab)
 
 def _new_para(doc: Document, left_cm: float = 0.0, first_cm: float = 0.0,
-              align=WD_ALIGN_PARAGRAPH.JUSTIFY,
+              align=WD_ALIGN_PARAGRAPH.LEFT, # <--- UBAH DEFAULT KE LEFT
               space_before_pt: float = 0, space_after_pt: float = 0) -> object:
     p = doc.add_paragraph()
+    p.alignment = align
+    # ... (sisanya tetap sama) ...
     p.alignment = align
     pf = p.paragraph_format
     pf.left_indent         = Cm(left_cm)
@@ -293,19 +297,14 @@ def _build_description(item: dict) -> str:
     )
 
 def _line1(doc, txt, align=WD_ALIGN_PARAGRAPH.LEFT):
-    """
-    Update: Default ke LEFT. 
-    Tab Stop Leader Dash sudah disiapkan di posisi margin kanan.
-    """
+    """Deskripsi kendaraan - Tab Dash di 16 cm."""
     p = _new_para(doc, left_cm=TAB_CM, first_cm=-TAB_CM, align=align)
     _add_tabstops(p, [
         (TAB_DESC_START, None, "left"),
-        (TAB_RIGHT_EDGE, "dash", "right") # <--- Ini fitur Tab Manual Anda
+        (POS_RIGHT, "dash", "right") # Menggunakan 16 cm
     ])
     _add_run(p, f"{txt}\t")
     return p
-
-
 # ──────────────────────────────────────────────────────────────────
 #  _label_line_triple  ← FIX v3.0
 #
@@ -325,49 +324,43 @@ def _line1(doc, txt, align=WD_ALIGN_PARAGRAPH.LEFT):
 # ──────────────────────────────────────────────────────────────────
 
 def _label_line_triple(doc, label, value, align=WD_ALIGN_PARAGRAPH.LEFT):
-    """Update: Harga diset LEFT dengan Tab Stop Dash siap pakai."""
-    hanging_indent_twips = POS_COLON + 240 
-    left_cm = hanging_indent_twips / 567
-    first_line_cm = (POS_LABEL_L - hanging_indent_twips) / 567
+    """Seksi 1: Nilai Limit - Tab Dash di 16 cm."""
+    target_indent_twips = POS_COLON + 240 
+    left_cm = target_indent_twips / 567
+    first_line_cm = (POS_LABEL_L - target_indent_twips) / 567
     
     p = _new_para(doc, left_cm=left_cm, first_cm=first_line_cm, align=align)
-    
-    _add_tabstops(p, [
-        (POS_COLON, "dash", "left"), 
-        (POS_RIGHT, "dash", "right") # <--- Ini fitur Tab Manual Anda
-    ])
-    
+    # Gunakan POS_RIGHT yang sudah kita set di 16 cm
+    _add_tabstops(p, [(POS_COLON, "dash", "left"), (POS_RIGHT, "dash", "right")])
     _add_run(p, f"{label}\t: {value}\t")
     return p
 
 def _label_pembeli(doc, label, value, align=WD_ALIGN_PARAGRAPH.LEFT):
-    """Update: Pembeli diset LEFT dengan Tab Stop Dash siap pakai."""
-    target_indent_twips = TAB_TWIPS 
+    """Seksi 2: Pembeli - Tab Dash di 16 cm."""
+    target_indent_twips = TAB_TWIPS
     left_cm = target_indent_twips / 567
     first_line_cm = (POS_PEMBELI_L - target_indent_twips) / 567
     
     p = _new_para(doc, left_cm=left_cm, first_cm=first_line_cm, align=align)
-    
-    _add_tabstops(p, [
-        (POS_COLON, "dash", "left"), 
-        (POS_RIGHT, "dash", "right") # <--- Ini fitur Tab Manual Anda
-    ])
-    
+    _add_tabstops(p, [(POS_COLON, "dash", "left"), (POS_RIGHT, "dash", "right")])
     _add_run(p, f"{label}\t: {value}\t")
     return p
 
 def add_lot_entry(doc, item: dict, section: str, seq_num: int = None):
-    """Fungsi tunggal tanpa duplikasi untuk memproses setiap lot lelang."""
-    lot_num   = item["lot"]
-    no_rangka = item["no_rangka"]
-    no_mesin  = item["no_mesin"]
+    """Fungsi tunggal untuk memproses setiap lot lelang."""
+    lot_num   = item.get("lot", 0)
+    no_rangka = item.get("no_rangka", "-")
+    no_mesin  = item.get("no_mesin", "-")
     desc      = _build_description(item)
+    
+    # FIX: Definisi list_num untuk nomor urut 1, 2, 3...
+    list_num  = seq_num if seq_num is not None else lot_num
+    
+    # Prefix untuk Seksi 2 & 3
     lot_pfx   = f"Lot {lot_num}, " if section in ("SOLD", "TAP") else ""
-    list_num  = seq_num if seq_num else lot_num
 
     if section == "LIMIT":
         val = format_rupiah(item.get("limit", 0))
-        # Otomatis LEFT
         _line1(doc, f"{list_num}.\t{desc} {no_rangka}, Nomor Mesin {no_mesin},")
         _label_line_triple(doc, "Nilai Limit", f"{val}.")
 
@@ -375,16 +368,18 @@ def add_lot_entry(doc, item: dict, section: str, seq_num: int = None):
         val = format_rupiah(item.get("harga_terbentuk", 0))
         pembeli = f"{item.get('nama_customer', '-')}, beralamat di {item.get('alamat_customer', '-')}"
         
-        # Otomatis LEFT
         _line1(doc, f"{list_num}.\t{lot_pfx}{desc} {no_rangka}, Nomor Mesin {no_mesin},")
         _label_line_triple(doc, "Harga Lelang", f"{val}.")
         _label_pembeli(doc, "Pembeli", f"{pembeli}.")
 
     elif section == "TAP":
-        # Paksa kembali ke JUSTIFY khusus untuk Section 3
         _line1(doc, f"{list_num}.\t{lot_pfx}{desc} {no_rangka}, Nomor Mesin {no_mesin}.", align=WD_ALIGN_PARAGRAPH.JUSTIFY)
         p = _new_para(doc, left_cm=TAB_CM, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
-        _add_tabstops(p, [(POS_MID, "dash", "center"), (POS_RIGHT, "dash", "right")])
+        # Tab Dash tengah di 8 cm, Tab Dash akhir di 16 cm
+        _add_tabstops(p, [
+            (int(POS_RIGHT/2), "dash", "center"), 
+            (POS_RIGHT, "dash", "right")
+        ])
         _add_run(p, "\tTAP\t")
 
 
@@ -582,39 +577,70 @@ def _add_footer(doc: Document, meta: dict):
 #  DYNAMIC EXCEL DATA READER
 # ══════════════════════════════════════════════════════════════════
 
+# ══════════════════════════════════════════════════════════════════
+#  REVISI PEMBACAAN EXCEL (SUPPORT ITEM LOT & POLICE NUMBER)
+# ══════════════════════════════════════════════════════════════════
+
+# Tambahkan alias sebanyak mungkin untuk mendukung berbagai template
+
 COLUMN_ALIASES = {
-    "lot": ["LOT"],
-    "nopol": ["NOPOL", "NOMOR POLISI", "NO POLISI", "NO. POLISI"],
-    "merk": ["MERK", "MEREK"],
-    "model": ["SERIES", "MODEL", "TYPE", "TIPE"],
-    "no_mesin": ["NOMOR MESIN", "NO MESIN", "NO. MESIN", "MESIN"],
-    "no_rangka": ["NOMOR RANGKA", "NO RANGKA", "NO. RANGKA", "RANGKA", "CHASSIS"],
+    "lot": ["LOT", "ITEM LOT", "LOT ID", "NO LOT"],
+    "nopol": ["NOPOL", "POLICE NUMBER", "NOMOR POLISI", "NO. POL", "PLAT"],
+    "merk": ["MERK", "MEREK", "BRAND"],
+    "model": ["MODEL", "TYPE", "TIPE", "MERK TYPE", "SERIES"],
+    "no_mesin": ["MESIN", "NO MESIN", "MACHINE", "NOMOR MESIN", "MACHINE NUMBER"],
+    "no_rangka": ["RANGKA", "NO RANGKA", "CHASSIS", "CHASSIS NUMBER", "NOMOR RANGKA"],
     "tahun": ["TAHUN", "YEAR"],
     "warna": ["WARNA", "COLOR"],
-    "status": ["STATUS"],
-    "nama_customer": ["NAMA CUSTOMER", "NAMA CUST", "PEMBELI"],
-    "alamat_customer": ["ALAMAT CUSTOMER", "ALAMAT CUST", "ALAMAT"],
-    "open_price": ["HARGA AWAL", "OPEN PRICE", "OPEN PRICE ALL", "NILAI LIMIT"],
-    "harga_terbentuk": ["HARGA TERBENTUK", "HARGA LELANG", "LAKU", "RESULT PRICE"],
+    "status": ["STATUS", "KETERANGAN"],
+    "nama_customer": ["PEMBELI", "NAMA CUSTOMER", "CUSTOMER NAME", "PEMENANG"],
+    "alamat_customer": ["ALAMAT", "CUSTOMER ADDRESS", "ALAMAT CUSTOMER", "ALAMAT PEMBELI"],
+    "open_price": ["HARGA AWAL", "HARGA AWAL ALL", "BASIC PRICE ALL", "OPEN PRICE", "BASIC PRICE", "LIMIT", "NILAI LIMIT"],
+    "harga_terbentuk": ["HARGA LELANG", "HARGA TERBENTUK", "AUCTION PRICE", "RESULT PRICE", "LAKU"],
 }
 
 def _find_header_and_map(ws, log) -> tuple:
     header_idx = -1
     col_map = {}
+    # Scan 15 baris pertama untuk mencari header
     for idx, row in enumerate(ws.iter_rows(min_row=1, max_row=15, values_only=True), start=1):
         row_strs = [str(cell).strip().upper() for cell in row if cell is not None]
-        if "LOT" in row_strs:
+        
+        # Logika Fleksibel: Cari baris yang mengandung kata "LOT" di kolom mana saja
+        if any("LOT" in s for s in row_strs):
             header_idx = idx
             for col_i, cell in enumerate(row):
                 if cell is None: continue
                 cell_val = str(cell).strip().upper()
                 for key, aliases in COLUMN_ALIASES.items():
                     if key not in col_map:
+                        # Cek apakah alias ada di dalam nama kolom (partial match)
                         if any(alias in cell_val for alias in aliases):
                             col_map[key] = col_i
-                if "TYPE" == cell_val and "type_col" not in col_map:
-                    col_map["type_col"] = col_i
             break
+    return header_idx, col_map
+
+def _find_header_and_map(ws, log) -> tuple:
+    header_idx = -1
+    col_map = {}
+    # Scan 15 baris pertama untuk mencari baris header
+    for idx, row in enumerate(ws.iter_rows(min_row=1, max_row=15, values_only=True), start=1):
+        row_strs = [str(cell).strip().upper() for cell in row if cell is not None]
+        
+        # Cek apakah ada kolom yang mengandung kata "LOT" (misal: "Item Lot")
+        if any("LOT" in s for s in row_strs):
+            header_idx = idx
+            for col_i, cell in enumerate(row):
+                if cell is None: continue
+                cell_val = str(cell).strip().upper()
+                
+                # Mapping kolom berdasarkan alias
+                for key, aliases in COLUMN_ALIASES.items():
+                    if key not in col_map:
+                        if any(alias in cell_val for alias in aliases):
+                            col_map[key] = col_i
+            break
+            
     if header_idx != -1:
         log(f"   🔍 Header terdeteksi otomatis pada baris ke-{header_idx}")
     return header_idx, col_map
@@ -623,8 +649,8 @@ def read_excel_data(excel_path: str, sheet_name: str, log_cb=None) -> list:
     def log(msg):
         if log_cb: log_cb(msg)
 
-    wb  = openpyxl.load_workbook(excel_path, data_only=True)
-    ws  = wb[sheet_name]
+    wb = openpyxl.load_workbook(excel_path, data_only=True)
+    ws = wb[sheet_name]
     jenis = "motor" if "MOTOR" in sheet_name.upper() else "mobil"
 
     header_idx, col_map = _find_header_and_map(ws, log)
@@ -633,32 +659,42 @@ def read_excel_data(excel_path: str, sheet_name: str, log_cb=None) -> list:
         return []
 
     items = []
+    # Mulai baca data dari satu baris setelah header
     for row in ws.iter_rows(min_row=header_idx + 1, values_only=True):
         def _get(col_key):
             idx = col_map.get(col_key, -1)
             if idx < 0 or idx >= len(row): return None
             return row[idx]
 
+        # Fungsi pembantu untuk membersihkan format Rupiah di Excel (Rp. 1.000,00 -> 1000)
+        def _get_numeric(col_key):
+            val = _get(col_key)
+            if val is None or val == "": return 0
+            if isinstance(val, (int, float)): return float(val)
+            try:
+                # Bersihkan string: buang Rp, spasi, titik (ribuan), ubah koma ke titik (desimal)
+                s_val = str(val).replace("Rp", "").replace(".", "").replace(",", ".").replace(" ", "").strip()
+                return float(s_val) if s_val else 0
+            except:
+                return 0
+
         lot_val = _get("lot")
         if lot_val is None: continue
         try:
-            lot_num = int(lot_val)
+            lot_num = int(float(lot_val))
         except (ValueError, TypeError):
             continue
 
         model_raw = _get("model")
-        if (model_raw is None or str(model_raw).strip() in ("-", "")) and "type_col" in col_map:
-            type_idx = col_map["type_col"]
-            if type_idx < len(row):
-                model_raw = row[type_idx]
-
         no_mesin_raw = _get("no_mesin")
-        if isinstance(no_mesin_raw, float):
-            no_mesin_raw = int(no_mesin_raw)
+        
+        if isinstance(no_mesin_raw, (float, int)):
+            no_mesin_raw = str(int(no_mesin_raw))
 
-        status_raw  = safe_str(_get("status"), "Not Sold")
+        status_raw = safe_str(_get("status"), "Not Sold")
         status_norm = status_raw.strip().upper()
 
+        # Mapping data ke dictionary dengan angka yang sudah bersih
         item = {
             "lot"             : lot_num,
             "nopol"           : safe_str(_get("nopol")),
@@ -671,8 +707,8 @@ def read_excel_data(excel_path: str, sheet_name: str, log_cb=None) -> list:
             "status"          : status_norm,
             "nama_customer"   : safe_str(_get("nama_customer")),
             "alamat_customer" : safe_str(_get("alamat_customer")),
-            "limit"           : _get("open_price") or 0,
-            "harga_terbentuk" : _get("harga_terbentuk") or 0,
+            "limit"           : _get_numeric("open_price"),     # FIX: Gunakan pembersih angka
+            "harga_terbentuk" : _get_numeric("harga_terbentuk"), # FIX: Gunakan pembersih angka
             "jenis"           : jenis,
         }
         items.append(item)
@@ -697,13 +733,14 @@ def resolve_section(status: str) -> str:
 # ══════════════════════════════════════════════════════════════════
 
 def _set_page_format(doc: Document):
+    """Setting kertas Folio 8.5 x 13 inci secara global."""
     sec = doc.sections[0]
-    sec.page_width    = Cm(PAGE_W_CM)
-    sec.page_height   = Cm(PAGE_H_CM)
-    sec.left_margin   = Cm(MARGIN_L_CM)
-    sec.right_margin  = Cm(MARGIN_R_CM)
-    sec.top_margin    = Cm(MARGIN_T_CM)
-    sec.bottom_margin = Cm(MARGIN_B_CM)
+    sec.page_width    = Cm(21.59)  # 8.5 in
+    sec.page_height   = Cm(33.02)  # 13 in
+    sec.left_margin   = Cm(4.0)
+    sec.right_margin  = Cm(1.5)
+    sec.top_margin    = Cm(2.0)
+    sec.bottom_margin = Cm(2.0)
 
 def _clear_default_para(doc: Document):
     for para in doc.paragraphs[:]:
@@ -830,6 +867,7 @@ def generate_doc(excel_path: str, output_path: str, sheet_name: str, meta: dict,
         if not items:
             raise ValueError("Tidak ada data lot yang dapat dibaca dari sheet ini.")
 
+        # Filter Status (Mendukung bahasa Indonesia & Inggris)
         STATUS_LAKU = ("SOLD", "TERJUAL", "LAKU")
         sold_items = [i for i in items if i["status"].strip().upper() in STATUS_LAKU]
         tap_items  = [i for i in items if i["status"].strip().upper() not in STATUS_LAKU]
@@ -839,67 +877,78 @@ def generate_doc(excel_path: str, output_path: str, sheet_name: str, meta: dict,
 
         log("📝 Membuat dokumen Word...")
         doc = Document()
+        
         _set_page_format(doc)
+        
         _clear_default_para(doc)
 
         normal_style = doc.styles["Normal"]
         normal_style.font.name = FONT_NAME
         normal_style.font.size = Pt(FONT_SIZE_PT)
+        _clear_default_para(doc) # Pastikan fungsi ini ada di kode Mas
 
         prog(28)
 
-        # ── Footer per-lembar ─────────────────────────────────────
-        log("📋 Menyiapkan footer per-lembar...")
+        # ── Footer & Header ─────────────────────────────────────
+        log("Menyiapkan footer per-lembar...")
         _add_footer(doc, meta)
         prog(30)
 
-        log("📄 Menulis header dokumen...")
+        log("Menulis header dokumen...")
         _add_header_section(doc, meta, items)
         prog(40)
 
-        log("🚗 Memproses setiap lot...")
+        log("Memproses setiap lot...")
 
         def _sec_hdr(title: str):
-            p = _new_para(doc, space_before_pt=4, space_after_pt=2)
-            _add_run(p, title)
+            p = _new_para(doc, space_before_pt=12, space_after_pt=6)
+            run = p.add_run(title)
+            run.bold = True
 
-        # Seksi 1 — Nilai Limit (Semua Item)
+        # # Seksi 1 — Nilai Limit (Semua Item)
         log(f"   📋 LIMIT: {len(items)} lot")
         for seq, itm in enumerate(items, start=1):
             try:
-                add_lot_entry(doc, itm, "LIMIT")
+                # seq_num=seq memastikan nomor urut 1, 2, 3...
+                add_lot_entry(doc, itm, "LIMIT", seq_num=seq)
             except Exception as e:
-                log(f"   ⚠️  Lot {itm['lot']} error: {e}")
+                log(f"   ⚠️  Lot {itm.get('lot', 'Unknown')} error: {e}")
         prog(60)
 
         # Seksi 2 — Barang Laku Terjual
         if sold_items:
             log(f"   💰 SOLD: {len(sold_items)} lot")
+            # Garis Pemisah
             p_sep = _new_para(doc, space_before_pt=12, space_after_pt=0)
-            _add_run(p_sep, DASH_LINE)
+            _add_run(p_sep, "-" * 70)
             _sec_hdr("Barang laku terjual:")
             p_sep2 = _new_para(doc, space_after_pt=6)
-            _add_run(p_sep2, DASH_LINE)
+            _add_run(p_sep2, "-" * 70)
+            
             for seq, itm in enumerate(sold_items, start=1):
                 try:
+                    # seq_num=seq memastikan nomor urut lurus di seksi 2
                     add_lot_entry(doc, itm, "SOLD", seq_num=seq)
                 except Exception as e:
-                    log(f"   ⚠️  Lot {itm['lot']} error: {e}")
+                    log(f"   ⚠️  Lot {itm.get('lot', 'Unknown')} error: {e}")
         prog(80)
 
         # Seksi 3 — Barang Tidak Laku Terjual (TAP)
         if tap_items:
             log(f"   ❌ TAP: {len(tap_items)} lot")
+            # Garis Pemisah
             p_sep = _new_para(doc, space_before_pt=12, space_after_pt=0)
-            _add_run(p_sep, DASH_LINE)
+            _add_run(p_sep, "-" * 70)
             _sec_hdr("Barang tidak laku terjual:")
             p_sep2 = _new_para(doc, space_after_pt=6)
-            _add_run(p_sep2, DASH_LINE)
+            _add_run(p_sep2, "-" * 70)
+            
             for seq, itm in enumerate(tap_items, start=1):
                 try:
+                    # seq_num=seq memastikan nomor urut lurus di seksi 3
                     add_lot_entry(doc, itm, "TAP", seq_num=seq)
                 except Exception as e:
-                    log(f"   ⚠️  Lot {itm['lot']} error: {e}")
+                    log(f"   ⚠️  Lot {itm.get('lot', 'Unknown')} error: {e}")
         prog(90)
 
         log("✍️  Menulis bagian penutup...")
@@ -919,7 +968,6 @@ def generate_doc(excel_path: str, output_path: str, sheet_name: str, meta: dict,
         log(f"❌ ERROR: {exc}")
         log(traceback.format_exc())
         return False, str(exc)
-
 
 # ══════════════════════════════════════════════════════════════════
 #  GUI  —  TKINTER  (Dark Theme)
