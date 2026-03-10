@@ -3,7 +3,7 @@
 LELANG APPS - Aplikasi Desktop Konversi Risalah Lelang
 Mengonversi data Excel ke Risalah Lelang Word (.docx)
 
-Author   : Senior Python Developer
+Author   : HANIF
 Version  : 3.0 (Fix: label dash, multiline, footer per-lembar)
 Standard : OpenXML / python-docx (F4, Arial 12pt)
 
