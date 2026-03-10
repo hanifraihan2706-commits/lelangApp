@@ -156,6 +156,25 @@ def format_rupiah(amount) -> str:
     except Exception:
         return "Rp. 0,00"
 
+def _fmt_currency(amount: float) -> str:
+    """
+    Format ringkas untuk metric card agar tidak terpotong.
+    BEFORE: f"Rp {val/1e6:.1f}M"  → "Rp 1083.3M"  ← terpotong di UI
+    AFTER:
+      ≥ 1 Miliar  → "1,08 M"   (M = Miliar)
+      ≥ 1 Juta    → "1.083 Jt" (Jt = Juta)
+      < 1 Juta    → "950 rb"   (rb = ribu)
+    """
+    if amount is None or amount <= 0:
+        return "Rp 0"
+    if amount >= 1_000_000_000:
+        return f"Rp {amount/1_000_000_000:.2f} M"
+    if amount >= 1_000_000:
+        return f"Rp {amount/1_000_000:,.0f} Jt"
+    if amount >= 1_000:
+        return f"Rp {amount/1_000:,.0f} rb"
+    return f"Rp {amount:,.0f}"
+
 def angka_ke_kata(n: int) -> str:
     satuan = ["","satu","dua","tiga","empat","lima","enam","tujuh","delapan","sembilan","sepuluh","sebelas"]
     if n == 0: return "nol"
@@ -285,40 +304,64 @@ def _build_nested_if_ordinal(parent_el, ordinal_list, **run_kwargs):
     parent_el.append(_make_xml_run(fld_char_type="end", **run_kwargs))
 
 def _add_footer(doc, meta: dict):
+    """
+    PATCH v4.1 — Pindah ke HEADER (atas kertas) sesuai format resmi:
+      BEFORE: section.footer  → teks muncul di bawah halaman
+      AFTER:  section.header  → teks muncul di atas setiap halaman
+
+    Susunan header per halaman:
+      Lembar [Ordinal] dari Risalah Lelang Nomor X tanggal Y   |   Pejabat Lelang Kelas II,
+      ─────────────────────────────────────────────────────────      [kosong]
+                                                                     ttd
+                                                                     [Nama Pejabat]
+    """
     nomor     = meta.get("nomor_risalah", "027/10/19/2026")
     tgl_raw   = meta.get("tanggal_lelang", "(18-02-2026)")
     tgl_short = _extract_short_date(tgl_raw)
     pejabat   = meta.get("nama_pejabat", "Rino Arief Rachman, S.H., M.H., M.Kn")
 
     section = doc.sections[0]
-    footer  = section.footer
-    ft      = footer._element
-    for p_elem in list(ft.findall(qn("w:p"))): ft.remove(p_elem)
 
-    def _new_ft_para(align="left", sp_before=0, sp_after=0):
+    # ── BEFORE: section.footer  |  AFTER: section.header ─────────
+    header = section.header
+    hd     = header._element          # <w:hdr> element
+    for p_elem in list(hd.findall(qn("w:p"))): hd.remove(p_elem)
+
+    def _new_hd_para(align="left", sp_before=0, sp_after=0):
         p = OxmlElement("w:p")
         pPr = OxmlElement("w:pPr")
         sp = OxmlElement("w:spacing")
-        sp.set(qn("w:before"), str(int(sp_before*20)))
-        sp.set(qn("w:after"),  str(int(sp_after*20)))
+        sp.set(qn("w:before"), str(int(sp_before * 20)))
+        sp.set(qn("w:after"),  str(int(sp_after  * 20)))
         sp.set(qn("w:line"), "240"); sp.set(qn("w:lineRule"), "auto")
         pPr.append(sp)
         if align != "left":
             jc = OxmlElement("w:jc"); jc.set(qn("w:val"), align); pPr.append(jc)
-        p.append(pPr); ft.append(p); return p
+        p.append(pPr); hd.append(p); return p
 
-    SIZE = 20
-    p_sep = _new_ft_para(); p_sep.append(_make_xml_run(DASH_LINE, size_half_pt=SIZE))
-    p_lembar = _new_ft_para(sp_before=2, sp_after=2)
+    SIZE = 20   # 10pt (half-points)
+
+    # ── Baris 1: "Lembar [ORDINAL] dari Risalah Lelang ..." ───────
+    p_lembar = _new_hd_para(sp_before=0, sp_after=0)
     p_lembar.append(_make_xml_run("Lembar ", size_half_pt=SIZE))
     _build_nested_if_ordinal(p_lembar, ORDINAL_ID, size_half_pt=SIZE)
-    p_lembar.append(_make_xml_run(f" dari Risalah Lelang Nomor {nomor} tanggal {tgl_short}", size_half_pt=SIZE))
+    p_lembar.append(_make_xml_run(
+        f" dari Risalah Lelang Nomor {nomor} tanggal {tgl_short}",
+        size_half_pt=SIZE))
+
+    # ── Baris 2: Garis pemisah ─────────────────────────────────────
+    p_sep = _new_hd_para(sp_before=0, sp_after=2)
+    p_sep.append(_make_xml_run(DASH_LINE, size_half_pt=SIZE))
+
+    # ── Blok TTD rata kanan ────────────────────────────────────────
     for text, bold, italic in [
         ("Pejabat Lelang Kelas II,", False, False),
-        ("", False, False), ("ttd", False, True), ("", False, False),
-        (pejabat, True, False),
+        ("",                          False, False),
+        ("ttd",                       False, True),
+        ("",                          False, False),
+        (pejabat,                     True,  False),
     ]:
-        p = _new_ft_para(align="right")
+        p = _new_hd_para(align="right", sp_before=0, sp_after=0)
         p.append(_make_xml_run(text, size_half_pt=SIZE, bold=bold, italic=italic))
 
 # ══════════════════════════════════════════════════════════════════
@@ -821,13 +864,75 @@ def main():
     .stTabs [data-baseweb="tab-list"] { background: #1e293b; border-radius: 8px; padding: 4px; }
     .stTabs [data-baseweb="tab"] { color: #94a3b8; }
     .stTabs [aria-selected="true"] { background: #3b82f6 !important; color: white !important; border-radius: 6px; }
-    .metric-card { background: #1e293b; border-radius: 12px; padding: 16px; text-align: center; border: 1px solid #334155; }
-    .metric-val  { font-size: 2rem; font-weight: 800; }
-    .metric-lbl  { font-size: 0.75rem; color: #94a3b8; margin-top: 4px; }
+
+    /* ── Custom metric cards — tidak pernah terpotong ─────────── */
+    .mc-row {
+        display: flex; gap: 10px; margin: 12px 0;
+        flex-wrap: wrap;
+    }
+    .mc-card {
+        flex: 1; min-width: 120px;
+        background: #1e293b;
+        border: 1px solid #334155;
+        border-radius: 12px;
+        padding: 14px 12px 10px 12px;
+        text-align: center;
+        box-sizing: border-box;
+    }
+    .mc-label {
+        font-size: 0.72rem; color: #64748b;
+        text-transform: uppercase; letter-spacing: .04em;
+        margin-bottom: 6px; line-height: 1.3;
+        white-space: normal; word-break: break-word;
+    }
+    .mc-value {
+        font-size: 1.55rem; font-weight: 800;
+        color: #e2e8f0; line-height: 1.1;
+        white-space: normal; word-break: break-word;
+    }
+    .mc-delta {
+        font-size: 0.75rem; margin-top: 5px;
+        color: #4ade80; font-weight: 600;
+    }
+    .mc-delta.neg { color: #f87171; }
+    .mc-value.accent-blue  { color: #60a5fa; }
+    .mc-value.accent-green { color: #4ade80; }
+    .mc-value.accent-amber { color: #fbbf24; }
+    .mc-value.accent-red   { color: #f87171; }
+
     div[data-testid="stMetricValue"] > div { color: #e2e8f0; }
     .stDownloadButton button { width: 100%; }
     </style>
     """, unsafe_allow_html=True)
+
+    # ── Helper: render metric cards sebagai HTML (tidak terpotong) ─
+    def _mc(cards: list) -> None:
+        """
+        Render satu baris metric cards pakai HTML custom.
+        cards = list of dict:
+          { "label": str, "value": str, "delta": str|None,
+            "accent": "blue"|"green"|"amber"|"red"|None }
+
+        BEFORE: st.metric("Total Limit", f"Rp {val/1e6:.1f}M")
+                → nilai terpotong jika terlalu panjang
+
+        AFTER:  _mc([{"label":"Total Limit","value":_fmt_currency(val)}])
+                → nilai auto-wrap, tidak pernah terpotong
+        """
+        items_html = ""
+        for c in cards:
+            accent = f" accent-{c.get('accent','')}" if c.get("accent") else ""
+            delta_html = ""
+            if c.get("delta"):
+                neg = "neg" if str(c["delta"]).startswith("-") else ""
+                delta_html = f'<div class="mc-delta {neg}">{c["delta"]}</div>'
+            items_html += f"""
+            <div class="mc-card">
+              <div class="mc-label">{c["label"]}</div>
+              <div class="mc-value{accent}">{c["value"]}</div>
+              {delta_html}
+            </div>"""
+        st.markdown(f'<div class="mc-row">{items_html}</div>', unsafe_allow_html=True)
 
     # ─── Top Bar ─────────────────────────────────────────────────
     st.markdown("""
@@ -959,13 +1064,17 @@ def main():
                 sold_val = sum(i.get("harga_terbentuk",0) or 0
                                for i in all_items if i["status"] in STATUS_LAKU)
 
-                c1, c2, c3, c4, c5 = st.columns(5)
-                c1.metric("Total Lot",  len(all_items))
-                c2.metric("SOLD",       n_sold,  delta=f"{n_sold/len(all_items)*100:.0f}%")
-                c3.metric("TAP",        n_tap)
-                c4.metric("Limit",      f"Rp {lim_val/1e6:.1f}M")
-                c5.metric("Terbentuk",  f"Rp {sold_val/1e6:.1f}M",
-                           delta=f"{sold_val/lim_val*100:.0f}%" if lim_val else "0%")
+                pct_sold  = n_sold / len(all_items) * 100 if all_items else 0
+                pct_harga = sold_val / lim_val * 100 if lim_val else 0
+                _mc([
+                    {"label": "Total Lot",      "value": str(len(all_items)), "accent": "blue"},
+                    {"label": "Terjual (SOLD)",  "value": str(n_sold),        "accent": "green",
+                     "delta": f"↑ {pct_sold:.0f}%"},
+                    {"label": "TAP",             "value": str(n_tap),          "accent": "red"},
+                    {"label": "Total Limit",     "value": _fmt_currency(lim_val), "accent": "amber"},
+                    {"label": "Harga Terbentuk", "value": _fmt_currency(sold_val), "accent": "green",
+                     "delta": f"↑ {pct_harga:.1f}% dari limit"},
+                ])
 
             # ── Download Buttons ──────────────────────────────
             st.divider()
@@ -1048,16 +1157,20 @@ def main():
         # ── Hitung Statistik ─────────────────────────────────
         fig_pie, fig_bar, stat = build_stat_charts(all_items, display_name)
 
-        # ── Metrics ───────────────────────────────────────────
-        c1, c2, c3, c4, c5, c6 = st.columns(6)
-        c1.metric("Total Lot",       stat["total"])
-        c2.metric("Terjual (SOLD)",  stat["sold"],
-                   delta=f"{stat['sold']/stat['total']*100:.0f}%" if stat["total"] else "0%")
-        c3.metric("Tidak Laku (TAP)",stat["tap"])
-        c4.metric("Not Sold (LIMIT)",stat["limit"])
-        c5.metric("Total Limit",     f"Rp {stat['total_limit']/1e6:.1f}M")
-        c6.metric("Harga Terbentuk", f"Rp {stat['total_harga']/1e6:.1f}M",
-                   delta=f"{stat['pencapaian']:.1f}% dari limit")
+        # ── Metrics ─── BEFORE: st.metric terpotong "Rp 108..."
+        #               AFTER:  _mc() HTML card tidak terpotong
+        pct_sold_s  = stat["sold"]  / stat["total"] * 100 if stat["total"] else 0
+        pct_harga_s = stat["pencapaian"]
+        _mc([
+            {"label": "Total Lot",       "value": str(stat["total"]),              "accent": "blue"},
+            {"label": "Terjual (SOLD)",   "value": str(stat["sold"]),              "accent": "green",
+             "delta": f"↑ {pct_sold_s:.0f}%"},
+            {"label": "TAP",              "value": str(stat["tap"]),               "accent": "red"},
+            {"label": "Not Sold (LIMIT)", "value": str(stat["limit"]),             "accent": "amber"},
+            {"label": "Total Limit",      "value": _fmt_currency(stat["total_limit"]), "accent": "amber"},
+            {"label": "Harga Terbentuk",  "value": _fmt_currency(stat["total_harga"]), "accent": "green",
+             "delta": f"↑ {pct_harga_s:.1f}% dari limit"},
+        ])
 
         st.divider()
 
