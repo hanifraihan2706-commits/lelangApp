@@ -149,10 +149,7 @@ def format_rupiah(amount) -> str:
         return "Rp. 0,00"
 
 def _fmt_currency(amount: float) -> str:
-    """
-    Format ringkas untuk metric card agar tidak terpotong.
-    BEFORE: f"Rp {val/1e6:.1f}M"  → "Rp 1083.3M"  ← terpotong di UI
-    AFTER:
+    
       ≥ 1 Miliar  → "1,08 M"   (M = Miliar)
       ≥ 1 Juta    → "1.083 Jt" (Jt = Juta)
       < 1 Juta    → "950 rb"   (rb = ribu)
