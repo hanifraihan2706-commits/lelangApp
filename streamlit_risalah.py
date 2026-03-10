@@ -7,6 +7,14 @@ Author   : HANIF RAIHAN
 Version  : 4.0 (Streamlit Web App)
 Standard : OpenXML / python-docx  |  Kertas F4  |  Arial 12pt
 
+CHANGELOG v4.0:
+  - Migrasi dari Tkinter Desktop → Streamlit Web App
+  - Upload multi-file Excel langsung di browser
+  - Tab "Statistik Lelang": grafik Matplotlib + ekspor PDF ringkasan
+  - Semua core logic (XML helpers, footer, tab-stop) tetap identik
+  - File .docx disimpan ke BytesIO → download langsung (tanpa disk)
+  - Lisensi dihapus sementara untuk demo
+"""
 
 # ══════════════════════════════════════════════════════════════════
 #  IMPORTS
@@ -149,7 +157,10 @@ def format_rupiah(amount) -> str:
         return "Rp. 0,00"
 
 def _fmt_currency(amount: float) -> str:
-    
+    """
+    Format ringkas untuk metric card agar tidak terpotong.
+    BEFORE: f"Rp {val/1e6:.1f}M"  → "Rp 1083.3M"  ← terpotong di UI
+    AFTER:
       ≥ 1 Miliar  → "1,08 M"   (M = Miliar)
       ≥ 1 Juta    → "1.083 Jt" (Jt = Juta)
       < 1 Juta    → "950 rb"   (rb = ribu)
@@ -878,9 +889,9 @@ def main():
                 border-left:4px solid #3b82f6;display:flex;align-items:center;gap:16px">
       <span style="font-size:2rem">⚖️</span>
       <div>
-        <div style="font-size:1.4rem;font-weight:800;color:#e2e8f0">LELANG APPS — PL2RINO</div>
+        <div style="font-size:1.4rem;font-weight:800;color:#e2e8f0">LELANG APPS — Web Edition</div>
         <div style="font-size:0.8rem;color:#94a3b8">
-            Risalah Lelang Generator v4.0   |  #by.haniffraihan
+            Risalah Lelang Generator v4.0 #by.haniffraihan
         </div>
       </div>
     </div>
