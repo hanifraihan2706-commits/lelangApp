@@ -7,14 +7,6 @@ Author   : HANIF RAIHAN
 Version  : 4.0 (Streamlit Web App)
 Standard : OpenXML / python-docx  |  Kertas F4  |  Arial 12pt
 
-CHANGELOG v4.0:
-  - Migrasi dari Tkinter Desktop → Streamlit Web App
-  - Upload multi-file Excel langsung di browser
-  - Tab "Statistik Lelang": grafik Matplotlib + ekspor PDF ringkasan
-  - Semua core logic (XML helpers, footer, tab-stop) tetap identik
-  - File .docx disimpan ke BytesIO → download langsung (tanpa disk)
-  - Lisensi dihapus sementara untuk demo
-"""
 
 # ══════════════════════════════════════════════════════════════════
 #  IMPORTS
